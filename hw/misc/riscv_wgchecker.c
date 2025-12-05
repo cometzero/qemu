@@ -883,7 +883,7 @@ static const TypeInfo riscv_wgc_iommu_memory_region_info = {
     DEFINE_PROP_UINT64("region-offset[" #N "]", RISCVWgCheckerState,   \
                        mem_regions[N].region_offset, 0)                 \
 
-static Property riscv_wgchecker_properties[] = {
+static const Property riscv_wgchecker_properties[] = {
     DEFINE_PROP_UINT32("slot-count", RISCVWgCheckerState, slot_count, 0x1),
     DEFINE_PROP_UINT32("mmio-size", RISCVWgCheckerState, mmio_size, 0x1000),
 

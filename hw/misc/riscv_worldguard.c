@@ -41,7 +41,7 @@ struct RISCVWorldGuardState *worldguard_config;
 /* perm field bitmask of wgChecker slot, it's depends on NWorld. */
 uint64_t wgc_slot_perm_mask;
 
-static Property riscv_worldguard_properties[] = {
+static const Property riscv_worldguard_properties[] = {
     DEFINE_PROP_UINT32("nworlds", RISCVWorldGuardState, nworlds, 0),
 
     /* Only Trusted WID could access wgCheckers if it is enabled. */
