@@ -150,6 +150,75 @@ static void wgc_append_child(WGCInfo *info, MemoryRegion *region,
     info->num_of_child += 1;
 }
 
+/*
+ * WorldGuard DRAM default slot configuration
+ *
+ * Memory layout (2GB DRAM starting at 0x80000000):
+ *   - Region 0: 0x80000000 - 0x9FFFFFFF (512MB) - Shared (all worlds RW)
+ *   - Region 1: 0xA0000000 - 0xAFFFFFFF (256MB) - World 3 (M-mode/OpenSBI)
+ *   - Region 2: 0xB0000000 - 0xBFFFFFFF (256MB) - World 2 (S-mode/U-Boot/Kernel)
+ *   - Region 3: 0xC0000000 - 0xCFFFFFFF (256MB) - World 1 (U-mode)
+ *   - Region 4: 0xD0000000 - 0xFFFFFFFF (768MB) - World 0 (reserved)
+ *
+ * Slot address format: physical_addr >> 2 (4-byte granularity)
+ */
+#define DRAM_BASE           0x80000000ULL
+#define WG_SLOT_ADDR(pa)    ((pa) >> 2)
+
+/* Permission bits: 2 bits per world (R=bit0, W=bit1) */
+#define WG_PERM_RW          0x3
+#define WG_PERM_R           0x1
+#define WG_PERM_NONE        0x0
+
+/* Build permission field for all 4 worlds */
+#define WG_PERM_ALL_RW      (WG_PERM_RW << 0 | WG_PERM_RW << 2 | \
+                             WG_PERM_RW << 4 | WG_PERM_RW << 6)
+#define WG_PERM_W3_RW       (WG_PERM_RW << 6)  /* Only World 3 RW */
+#define WG_PERM_W2_RW       (WG_PERM_RW << 4)  /* Only World 2 RW */
+#define WG_PERM_W1_RW       (WG_PERM_RW << 2)  /* Only World 1 RW */
+#define WG_PERM_W0_RW       (WG_PERM_RW << 0)  /* Only World 0 RW */
+
+/* World 3 can access all regions (trusted) */
+#define WG_PERM_W3_ALL      (WG_PERM_W3_RW)
+
+/* cfg.A field values */
+#define WG_CFG_OFF          0x0
+#define WG_CFG_TOR          0x1
+#define WG_CFG_NAPOT        0x3
+
+/*
+ * Default DRAM slots configuration (set when wg-hwbypass=off)
+ * These slots define world-specific memory regions.
+ *
+ * Note: slot[0] is hardcoded to start address by wgChecker,
+ *       so we start from slot[1].
+ *
+ * IMPORTANT: When hwbypass=off, CPU starts with mlwid=0 at reset.
+ * Therefore WID 0 must have access to all regions for boot.
+ * After OpenSBI sets up WorldGuard, it can restrict access.
+ */
+static WgCheckerSlot virt_wgc_dram_default_slots[] = {
+    /* slot[1]: End of shared region (0xA0000000), all worlds can access */
+    { .addr = WG_SLOT_ADDR(0xA0000000), .perm = WG_PERM_ALL_RW, .cfg = WG_CFG_TOR },
+    /* slot[2]: End of World3 region (0xB0000000), W0+W3 (boot+trusted) */
+    { .addr = WG_SLOT_ADDR(0xB0000000), .perm = WG_PERM_W0_RW | WG_PERM_W3_RW, .cfg = WG_CFG_TOR },
+    /* slot[3]: End of World2 region (0xC0000000), W0+W2+W3 */
+    { .addr = WG_SLOT_ADDR(0xC0000000), .perm = WG_PERM_W0_RW | WG_PERM_W2_RW | WG_PERM_W3_RW, .cfg = WG_CFG_TOR },
+    /* slot[4]: End of World1 region (0xD0000000), W0+W1+W3 */
+    { .addr = WG_SLOT_ADDR(0xD0000000), .perm = WG_PERM_W0_RW | WG_PERM_W1_RW | WG_PERM_W3_RW, .cfg = WG_CFG_TOR },
+    /* slot[5]: End of DRAM (0x100000000 = 2GB), W0+W3 for remaining space */
+    { .addr = WG_SLOT_ADDR(0x100000000ULL), .perm = WG_PERM_W0_RW | WG_PERM_W3_RW, .cfg = WG_CFG_TOR },
+};
+
+/*
+ * Default UART wgChecker slots - all worlds need console access
+ * UART is at 0x10000000-0x100000FF
+ */
+static WgCheckerSlot virt_wgc_uart_default_slots[] = {
+    /* slot[1]: All worlds can access UART for console output */
+    { .addr = WG_SLOT_ADDR(0x10000100), .perm = WG_PERM_ALL_RW, .cfg = WG_CFG_TOR },
+};
+
 static PFlashCFI01 *virt_flash_create1(RISCVVirtState *s,
                                        const char *name,
                                        const char *alias_prop_name)
@@ -1474,13 +1543,16 @@ static void virt_build_smbios(RISCVVirtState *s)
     }
 }
 
-static DeviceState *create_wgc(WGCInfo *info, DeviceState *irqchip)
+static DeviceState *create_wgc(RISCVVirtState *s, WGCInfo *info,
+                               int wgc_idx, DeviceState *irqchip)
 {
     MemoryRegion *system_memory = get_system_memory();
     DeviceState *wgc;
     MemoryRegion *upstream_mr, *downstream_mr;
     qemu_irq irq = qdev_get_gpio_in(irqchip, info->irq_num);
     hwaddr base, size;
+    uint32_t num_default_slots = 0;
+    WgCheckerSlot *default_slots = NULL;
 
     /* Unmap downstream_mr from system_memory if it is already mapped. */
     for (int i = 0; i < info->num_of_child; i++) {
@@ -1501,9 +1573,24 @@ static DeviceState *create_wgc(WGCInfo *info, DeviceState *irqchip)
     base = virt_memmap[info->memmap_idx].base;
     size = virt_memmap[info->memmap_idx].size;
 
+    /*
+     * Set default slots for wgChecker devices when hwbypass is off.
+     * This creates world-specific memory regions for testing.
+     */
+    if (!s->wg_hwbypass) {
+        if (wgc_idx == WGC_DRAM) {
+            num_default_slots = ARRAY_SIZE(virt_wgc_dram_default_slots);
+            default_slots = virt_wgc_dram_default_slots;
+        } else if (wgc_idx == WGC_UART) {
+            num_default_slots = ARRAY_SIZE(virt_wgc_uart_default_slots);
+            default_slots = virt_wgc_uart_default_slots;
+        }
+    }
+
     wgc = riscv_wgchecker_create(
         base, size, irq, info->slot_count, 0, 0,
-        info->num_of_child, info->c_region, info->c_offset, 0, NULL);
+        info->num_of_child, info->c_region, info->c_offset,
+        num_default_slots, default_slots);
 
     /* Map upstream_mr to system_memory */
     for (int i = 0; i < info->num_of_child; i++) {
@@ -1516,16 +1603,16 @@ static DeviceState *create_wgc(WGCInfo *info, DeviceState *irqchip)
     return wgc;
 }
 
-static void virt_create_worldguard(WGCInfo *wgcinfo, int wgc_num,
-                                   DeviceState *irqchip)
+static void virt_create_worldguard(RISCVVirtState *s, WGCInfo *wgcinfo,
+                                   int wgc_num, DeviceState *irqchip)
 {
     CPUState *cpu;
 
-    /* Global WG config */
-    riscv_worldguard_create(VIRT_WG_NWORLDS,
-                            VIRT_WG_TRUSTEDWID,
-                            VIRT_WG_HWBYPASS,
-                            VIRT_WG_TZCOMPAT);
+    /* Global WG config - use machine properties */
+    riscv_worldguard_create(s->wg_nworlds,
+                            s->wg_trustedwid,
+                            s->wg_hwbypass,
+                            s->wg_tzcompat);
 
     /* Enable WG extension of each CPU */
     CPU_FOREACH(cpu) {
@@ -1534,9 +1621,9 @@ static void virt_create_worldguard(WGCInfo *wgcinfo, int wgc_num,
         riscv_worldguard_apply_cpu(env->mhartid);
     }
 
-    /* Create all wgChecker devices */
+    /* Create all wgChecker devices with state for default slot config */
     for (int i = 0; i < wgc_num; i++) {
-        create_wgc(&wgcinfo[i], DEVICE(irqchip));
+        create_wgc(s, &wgcinfo[i], i, DEVICE(irqchip));
     }
 }
 
@@ -1852,7 +1939,7 @@ static void virt_machine_init(MachineState *machine)
     }
 
     if (object_property_get_bool(OBJECT(s), "wg", NULL)) {
-        virt_create_worldguard(wgcinfo, WGC_NUM, mmio_irqchip);
+        virt_create_worldguard(s, wgcinfo, WGC_NUM, mmio_irqchip);
     }
 
     /* load/create device tree */
@@ -1895,6 +1982,12 @@ static void virt_machine_instance_init(Object *obj)
     s->oem_id = g_strndup(ACPI_BUILD_APPNAME6, 6);
     s->oem_table_id = g_strndup(ACPI_BUILD_APPNAME8, 8);
     s->acpi = ON_OFF_AUTO_AUTO;
+
+    /* WorldGuard default settings */
+    s->wg_nworlds = VIRT_WG_NWORLDS;
+    s->wg_trustedwid = VIRT_WG_TRUSTEDWID;
+    s->wg_hwbypass = VIRT_WG_HWBYPASS;
+    s->wg_tzcompat = VIRT_WG_TZCOMPAT;
     s->iommu_sys = ON_OFF_AUTO_AUTO;
 }
 
@@ -1910,6 +2003,60 @@ static void virt_set_wg(Object *obj, bool value, Error **errp)
     RISCVVirtState *s = RISCV_VIRT_MACHINE(obj);
 
     s->have_wg = value;
+}
+
+static char *virt_get_wg_nworlds(Object *obj, Error **errp)
+{
+    RISCVVirtState *s = RISCV_VIRT_MACHINE(obj);
+    return g_strdup_printf("%u", s->wg_nworlds);
+}
+
+static void virt_set_wg_nworlds(Object *obj, const char *val, Error **errp)
+{
+    RISCVVirtState *s = RISCV_VIRT_MACHINE(obj);
+    uint32_t nworlds = atoi(val);
+
+    if (nworlds == 0 || (nworlds & (nworlds - 1))) {
+        error_setg(errp, "WorldGuard nworlds must be a power of 2");
+        return;
+    }
+    s->wg_nworlds = nworlds;
+}
+
+static char *virt_get_wg_trustedwid(Object *obj, Error **errp)
+{
+    RISCVVirtState *s = RISCV_VIRT_MACHINE(obj);
+    return g_strdup_printf("%u", s->wg_trustedwid);
+}
+
+static void virt_set_wg_trustedwid(Object *obj, const char *val, Error **errp)
+{
+    RISCVVirtState *s = RISCV_VIRT_MACHINE(obj);
+    s->wg_trustedwid = atoi(val);
+}
+
+static bool virt_get_wg_hwbypass(Object *obj, Error **errp)
+{
+    RISCVVirtState *s = RISCV_VIRT_MACHINE(obj);
+    return s->wg_hwbypass;
+}
+
+static void virt_set_wg_hwbypass(Object *obj, bool value, Error **errp)
+{
+    RISCVVirtState *s = RISCV_VIRT_MACHINE(obj);
+    s->wg_hwbypass = value;
+}
+
+static bool virt_get_wg_tzcompat(Object *obj, Error **errp)
+{
+    RISCVVirtState *s = RISCV_VIRT_MACHINE(obj);
+    return s->wg_tzcompat;
+}
+
+static void virt_set_wg_tzcompat(Object *obj, bool value, Error **errp)
+{
+    RISCVVirtState *s = RISCV_VIRT_MACHINE(obj);
+    s->wg_tzcompat = value;
 }
 
 static char *virt_get_aia_guests(Object *obj, Error **errp)
@@ -2138,6 +2285,32 @@ static void virt_machine_class_init(ObjectClass *oc, const void *data)
     object_class_property_set_description(oc, "wg",
                                               "Set on/off to enable/disable the "
                                               "RISC-V WorldGuard.");
+
+    object_class_property_add_str(oc, "wg-nworlds",
+                                  virt_get_wg_nworlds,
+                                  virt_set_wg_nworlds);
+    object_class_property_set_description(oc, "wg-nworlds",
+                                          "Set number of WorldGuard worlds "
+                                          "(must be power of 2, default 4).");
+
+    object_class_property_add_str(oc, "wg-trustedwid",
+                                  virt_get_wg_trustedwid,
+                                  virt_set_wg_trustedwid);
+    object_class_property_set_description(oc, "wg-trustedwid",
+                                          "Set trusted World ID for WorldGuard "
+                                          "(default: nworlds-1).");
+
+    object_class_property_add_bool(oc, "wg-hwbypass", virt_get_wg_hwbypass,
+                                   virt_set_wg_hwbypass);
+    object_class_property_set_description(oc, "wg-hwbypass",
+                                          "Set on/off for WorldGuard "
+                                          "hardware bypass mode (default on).");
+
+    object_class_property_add_bool(oc, "wg-tzcompat", virt_get_wg_tzcompat,
+                                   virt_set_wg_tzcompat);
+    object_class_property_set_description(oc, "wg-tzcompat",
+                                          "Set on/off for WorldGuard "
+                                          "TrustZone compatible mode.");
 }
 
 static const TypeInfo virt_machine_typeinfo = {

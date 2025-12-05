@@ -58,6 +58,10 @@ struct RISCVVirtState {
     RISCVVirtAIAType aia_type;
     int aia_guests;
     bool have_wg;
+    uint32_t wg_nworlds;
+    uint32_t wg_trustedwid;
+    bool wg_hwbypass;
+    bool wg_tzcompat;
     char *oem_id;
     char *oem_table_id;
     OnOffAuto acpi;
