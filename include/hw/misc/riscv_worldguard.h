@@ -20,7 +20,7 @@
 #define HW_RISCV_WORLDGUARD_H
 
 #include "qom/object.h"
-#include "hw/sysbus.h"
+#include "hw/core/sysbus.h"
 #include "exec/hwaddr.h"
 
 #define TYPE_RISCV_WORLDGUARD "riscv.worldguard"
