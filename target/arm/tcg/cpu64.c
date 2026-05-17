@@ -1052,6 +1052,15 @@ static void aarch64_a710_initfn(Object *obj)
     aarch64_add_sve_properties(obj);
 }
 
+static void aarch64_a720ae_initfn(Object *obj)
+{
+    ARMCPU *cpu = ARM_CPU(obj);
+
+    aarch64_a710_initfn(obj);
+    cpu->dtb_compatible = "arm,cortex-a720ae";
+    cpu->midr = 0x410FD890;          /* r0p0 */
+}
+
 /* Extra IMPDEF regs in the N2 beyond those in the A710 */
 static const ARMCPRegInfo neoverse_n2_cp_reginfo[] = {
     { .name = "CPURNDBR_EL3", .state = ARM_CP_STATE_AA64,
@@ -1413,6 +1422,7 @@ static const ARMCPUInfo aarch64_cpus[] = {
      */
     { .name = "cortex-a78ae",       .initfn = aarch64_a78ae_initfn },
     { .name = "cortex-a710",        .initfn = aarch64_a710_initfn },
+    { .name = "cortex-a720ae",      .initfn = aarch64_a720ae_initfn },
     { .name = "a64fx",              .initfn = aarch64_a64fx_initfn },
     { .name = "neoverse-n1",        .initfn = aarch64_neoverse_n1_initfn },
     { .name = "neoverse-v1",        .initfn = aarch64_neoverse_v1_initfn },
