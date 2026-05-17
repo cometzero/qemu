@@ -72,6 +72,7 @@ Supported guest CPU types:
 - ``cortex-a72`` (64-bit)
 - ``cortex-a76`` (64-bit)
 - ``cortex-a710`` (64-bit)
+- ``cortex-a720ae`` (64-bit)
 - ``a64fx`` (64-bit)
 - ``host`` (with KVM and HVF only)
 - ``neoverse-n1`` (64-bit)
