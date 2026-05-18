@@ -1052,13 +1052,69 @@ static void aarch64_a710_initfn(Object *obj)
     aarch64_add_sve_properties(obj);
 }
 
+static const ARMCPRegInfo cortex_a720ae_dsu_pmu_cp_reginfo[] = {
+    /*
+     * RD-Aspen exposes the DSU PMU in DT. QEMU does not model the DSU, so
+     * provide a no-counter DSU PMU register bank to let Linux bind the driver
+     * without taking undefined sysreg traps.
+     */
+    { .name = "CLUSTERPMCR_EL1", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 5, .opc2 = 0,
+      .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0x40 },
+    { .name = "CLUSTERPMCNTENSET_EL1", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 5, .opc2 = 1,
+      .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
+    { .name = "CLUSTERPMCNTENCLR_EL1", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 5, .opc2 = 2,
+      .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
+    { .name = "CLUSTERPMOVSSET_EL1", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 5, .opc2 = 3,
+      .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
+    { .name = "CLUSTERPMOVSCLR_EL1", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 5, .opc2 = 4,
+      .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
+    { .name = "CLUSTERPMSELR_EL1", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 5, .opc2 = 5,
+      .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
+    { .name = "CLUSTERPMINTENSET_EL1", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 5, .opc2 = 6,
+      .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
+    { .name = "CLUSTERPMINTENCLR_EL1", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 5, .opc2 = 7,
+      .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
+    { .name = "CLUSTERPMCCNTR_EL1", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 6, .opc2 = 0,
+      .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
+    { .name = "CLUSTERPMXEVTYPER_EL1", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 6, .opc2 = 1,
+      .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
+    { .name = "CLUSTERPMXEVCNTR_EL1", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 6, .opc2 = 2,
+      .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
+    { .name = "CLUSTERPMMDCR_EL1", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 6, .opc2 = 3,
+      .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
+    { .name = "CLUSTERPMCEID0_EL1", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 6, .opc2 = 4,
+      .access = PL1_R, .type = ARM_CP_CONST, .resetvalue = 0 },
+    { .name = "CLUSTERPMCEID1_EL1", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 6, .opc2 = 5,
+      .access = PL1_R, .type = ARM_CP_CONST, .resetvalue = 0 },
+};
+
 static void aarch64_a720ae_initfn(Object *obj)
 {
     ARMCPU *cpu = ARM_CPU(obj);
+    ARMISARegisters *isar = &cpu->isar;
+    uint64_t t;
 
     aarch64_a710_initfn(obj);
+    t = GET_IDREG(isar, ID_AA64MMFR0);
+    t = FIELD_DP64(t, ID_AA64MMFR0, PARANGE, 5); /* 48-bit PA */
+    SET_IDREG(isar, ID_AA64MMFR0, t);
     cpu->dtb_compatible = "arm,cortex-a720ae";
     cpu->midr = 0x410FD890;          /* r0p0 */
+    define_arm_cp_regs(cpu, cortex_a720ae_dsu_pmu_cp_reginfo);
 }
 
 /* Extra IMPDEF regs in the N2 beyond those in the A710 */
