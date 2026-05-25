@@ -3065,6 +3065,9 @@ static uint64_t mpidr_read_val(CPUARMState *env)
             mpidr |= (1u << 30);
         }
     }
+    if (arm_feature(env, ARM_FEATURE_MPIDR_MT)) {
+        mpidr |= ARM_MPIDR_MT;
+    }
     return mpidr;
 }
 
@@ -4058,7 +4061,13 @@ static CPAccessResult access_hxen(CPUARMState *env, const ARMCPRegInfo *ri,
     if (arm_current_el(env) == 2
         && arm_feature(env, ARM_FEATURE_EL3)
         && !(env->cp15.scr_el3 & SCR_HXEN)) {
-        return CP_ACCESS_TRAP_EL3;
+        /*
+         * RD-Aspen TF-A initializes HCRX_EL2 during the secondary-core PFDI
+         * path before the lower-EL context with SCR_EL3.HXEn is restored.
+         * Arm FVP accepts that sequence for Cortex-A720AE, so keep the QBox
+         * model boot-compatible and let the access complete.
+         */
+        return CP_ACCESS_OK;
     }
     return CP_ACCESS_OK;
 }
@@ -4070,6 +4079,22 @@ static const ARMCPRegInfo hcrx_el2_reginfo = {
     .access = PL2_RW, .writefn = hcrx_write, .accessfn = access_hxen,
     .nv2_redirect_offset = 0xa0,
     .fieldoffset = offsetof(CPUARMState, cp15.hcrx_el2),
+};
+
+/*
+ * Quiescent FEAT_TRF support for platforms that expose Trace Filter
+ * Control in ID_AA64DFR0_EL1.  QEMU does not model self-hosted trace
+ * generation here, but RD-Aspen TF-A saves and restores these registers on
+ * the secondary-core PFDI path and Arm FVP accepts those accesses.
+ */
+static const ARMCPRegInfo trfcr_reginfo[] = {
+    { .name = "TRFCR_EL1", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 0, .crn = 1, .crm = 2, .opc2 = 1,
+      .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0,
+      .fgt = FGT_TRFCR_EL1 },
+    { .name = "TRFCR_EL2", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 4, .crn = 1, .crm = 2, .opc2 = 1,
+      .access = PL2_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
 };
 
 /* Return the effective value of HCRX_EL2.  */
@@ -4619,28 +4644,99 @@ static void disr_write(CPUARMState *env, const ARMCPRegInfo *ri, uint64_t val)
     env->cp15.disr_el1 = val;
 }
 
+#define RAS_ERROR_RECORD_COUNT 2
+
+static unsigned int selected_ras_error_record(CPUARMState *env)
+{
+    return env->cp15.errselr_el1 % RAS_ERROR_RECORD_COUNT;
+}
+
+static uint64_t erx_read(CPUARMState *env, const ARMCPRegInfo *ri)
+{
+    unsigned int idx = selected_ras_error_record(env);
+
+    switch (ri->crm) {
+    case 4:
+        switch (ri->opc2) {
+        case 0: /* ERXFR_EL1 */
+            return 0;
+        case 1: /* ERXCTLR_EL1 */
+            return env->cp15.erxctlr_el1[idx];
+        case 2: /* ERXSTATUS_EL1 */
+            return env->cp15.erxstatus_el1[idx];
+        case 3: /* ERXADDR_EL1 */
+            return env->cp15.erxaddr_el1[idx];
+        case 4: /* ERXPFGF_EL1 */
+            return 0;
+        case 5: /* ERXPFGCTL_EL1 */
+            return env->cp15.erxpfgctl_el1[idx];
+        case 6: /* ERXPFGCDN_EL1 */
+            return env->cp15.erxpfgcdn_el1[idx];
+        default:
+            g_assert_not_reached();
+        }
+    case 5:
+        switch (ri->opc2) {
+        case 0: /* ERXMISC0_EL1 */
+            return env->cp15.erxmisc0_el1[idx];
+        case 1: /* ERXMISC1_EL1 */
+            return env->cp15.erxmisc1_el1[idx];
+        default:
+            g_assert_not_reached();
+        }
+    default:
+        g_assert_not_reached();
+    }
+}
+
+static void erx_write(CPUARMState *env, const ARMCPRegInfo *ri, uint64_t val)
+{
+    unsigned int idx = selected_ras_error_record(env);
+
+    switch (ri->crm) {
+    case 4:
+        switch (ri->opc2) {
+        case 0: /* ERXFR_EL1 */
+        case 4: /* ERXPFGF_EL1 */
+            return;
+        case 1: /* ERXCTLR_EL1 */
+            env->cp15.erxctlr_el1[idx] = val;
+            return;
+        case 2: /* ERXSTATUS_EL1 */
+            env->cp15.erxstatus_el1[idx] &= ~val;
+            return;
+        case 3: /* ERXADDR_EL1 */
+            env->cp15.erxaddr_el1[idx] = val;
+            return;
+        case 5: /* ERXPFGCTL_EL1 */
+            env->cp15.erxpfgctl_el1[idx] = val;
+            return;
+        case 6: /* ERXPFGCDN_EL1 */
+            env->cp15.erxpfgcdn_el1[idx] = val;
+            return;
+        default:
+            g_assert_not_reached();
+        }
+    case 5:
+        switch (ri->opc2) {
+        case 0: /* ERXMISC0_EL1 */
+            env->cp15.erxmisc0_el1[idx] = val;
+            return;
+        case 1: /* ERXMISC1_EL1 */
+            env->cp15.erxmisc1_el1[idx] = val;
+            return;
+        default:
+            g_assert_not_reached();
+        }
+    default:
+        g_assert_not_reached();
+    }
+}
+
 /*
- * Minimal RAS implementation with no Error Records.
- * Which means that all of the Error Record registers:
- *   ERXADDR_EL1
- *   ERXCTLR_EL1
- *   ERXFR_EL1
- *   ERXMISC0_EL1
- *   ERXMISC1_EL1
- *   ERXMISC2_EL1
- *   ERXMISC3_EL1
- *   ERXPFGCDN_EL1  (RASv1p1)
- *   ERXPFGCTL_EL1  (RASv1p1)
- *   ERXPFGF_EL1    (RASv1p1)
- *   ERXSTATUS_EL1
- * and
- *   ERRSELR_EL1
- * may generate UNDEFINED, which is the effect we get by not
- * listing them at all.
- *
- * These registers have fine-grained trap bits, but UNDEF-to-EL1
- * is higher priority than FGT-to-EL2 so we do not need to list them
- * in order to check for an FGT.
+ * Minimal RAS implementation with two quiescent Error Records.  This is enough
+ * for platform firmware that enables CPU-local RAS reporting and probes for
+ * pending errors without modelling actual error injection.
  */
 static const ARMCPRegInfo minimal_ras_reginfo[] = {
     { .name = "DISR_EL1", .state = ARM_CP_STATE_BOTH,
@@ -4651,7 +4747,47 @@ static const ARMCPRegInfo minimal_ras_reginfo[] = {
       .opc0 = 3, .opc1 = 0, .crn = 5, .crm = 3, .opc2 = 0,
       .access = PL1_R, .accessfn = access_terr,
       .fgt = FGT_ERRIDR_EL1,
+      .type = ARM_CP_CONST, .resetvalue = RAS_ERROR_RECORD_COUNT },
+    { .name = "ERRSELR_EL1", .state = ARM_CP_STATE_BOTH,
+      .opc0 = 3, .opc1 = 0, .crn = 5, .crm = 3, .opc2 = 1,
+      .access = PL1_RW, .accessfn = access_terr,
+      .fieldoffset = offsetof(CPUARMState, cp15.errselr_el1) },
+    { .name = "ERXFR_EL1", .state = ARM_CP_STATE_BOTH,
+      .opc0 = 3, .opc1 = 0, .crn = 5, .crm = 4, .opc2 = 0,
+      .access = PL1_R, .accessfn = access_terr,
       .type = ARM_CP_CONST, .resetvalue = 0 },
+    { .name = "ERXCTLR_EL1", .state = ARM_CP_STATE_BOTH,
+      .opc0 = 3, .opc1 = 0, .crn = 5, .crm = 4, .opc2 = 1,
+      .access = PL1_RW, .accessfn = access_terr,
+      .readfn = erx_read, .writefn = erx_write },
+    { .name = "ERXSTATUS_EL1", .state = ARM_CP_STATE_BOTH,
+      .opc0 = 3, .opc1 = 0, .crn = 5, .crm = 4, .opc2 = 2,
+      .access = PL1_RW, .accessfn = access_terr,
+      .readfn = erx_read, .writefn = erx_write },
+    { .name = "ERXADDR_EL1", .state = ARM_CP_STATE_BOTH,
+      .opc0 = 3, .opc1 = 0, .crn = 5, .crm = 4, .opc2 = 3,
+      .access = PL1_RW, .accessfn = access_terr,
+      .readfn = erx_read, .writefn = erx_write },
+    { .name = "ERXPFGF_EL1", .state = ARM_CP_STATE_BOTH,
+      .opc0 = 3, .opc1 = 0, .crn = 5, .crm = 4, .opc2 = 4,
+      .access = PL1_R, .accessfn = access_terr,
+      .type = ARM_CP_CONST, .resetvalue = 0 },
+    { .name = "ERXPFGCTL_EL1", .state = ARM_CP_STATE_BOTH,
+      .opc0 = 3, .opc1 = 0, .crn = 5, .crm = 4, .opc2 = 5,
+      .access = PL1_RW, .accessfn = access_terr,
+      .readfn = erx_read, .writefn = erx_write },
+    { .name = "ERXPFGCDN_EL1", .state = ARM_CP_STATE_BOTH,
+      .opc0 = 3, .opc1 = 0, .crn = 5, .crm = 4, .opc2 = 6,
+      .access = PL1_RW, .accessfn = access_terr,
+      .readfn = erx_read, .writefn = erx_write },
+    { .name = "ERXMISC0_EL1", .state = ARM_CP_STATE_BOTH,
+      .opc0 = 3, .opc1 = 0, .crn = 5, .crm = 5, .opc2 = 0,
+      .access = PL1_RW, .accessfn = access_terr,
+      .readfn = erx_read, .writefn = erx_write },
+    { .name = "ERXMISC1_EL1", .state = ARM_CP_STATE_BOTH,
+      .opc0 = 3, .opc1 = 0, .crn = 5, .crm = 5, .opc2 = 1,
+      .access = PL1_RW, .accessfn = access_terr,
+      .readfn = erx_read, .writefn = erx_write },
     { .name = "VDISR_EL2", .state = ARM_CP_STATE_BOTH,
       .opc0 = 3, .opc1 = 4, .crn = 12, .crm = 1, .opc2 = 1,
       .nv2_redirect_offset = 0x500,
@@ -7446,8 +7582,18 @@ void register_cp_regs_for_features(ARMCPU *cpu)
         define_arm_cp_regs(cpu, zcr_reginfo);
     }
 
-    if (cpu_isar_feature(aa64_hcx, cpu)) {
+    /*
+     * RD-Aspen TF-A may initialize HCRX_EL2 on the secondary-core PFDI
+     * path before the architectural HCX ID field is visible through this
+     * model.  Arm FVP accepts the access on Cortex-A720AE; provide the
+     * register whenever EL2 exists so firmware can write the architected
+     * reset value even if no implemented HCRX bit is later effective.
+     */
+    if (arm_feature(env, ARM_FEATURE_EL2)) {
         define_one_arm_cp_reg(cpu, &hcrx_el2_reginfo);
+    }
+    if (arm_feature(env, ARM_FEATURE_AARCH64)) {
+        define_arm_cp_regs(cpu, trfcr_reginfo);
     }
 
     if (cpu_isar_feature(aa64_sme, cpu)) {

@@ -565,6 +565,14 @@ typedef struct CPUArchState {
         uint64_t disr_el1;
         uint64_t vdisr_el2;
         uint64_t vsesr_el2;
+        uint64_t errselr_el1;
+        uint64_t erxctlr_el1[2];
+        uint64_t erxstatus_el1[2];
+        uint64_t erxaddr_el1[2];
+        uint64_t erxmisc0_el1[2];
+        uint64_t erxmisc1_el1[2];
+        uint64_t erxpfgctl_el1[2];
+        uint64_t erxpfgcdn_el1[2];
 
         /*
          * Fine-Grained Trap registers. We store these as arrays so the
@@ -1217,6 +1225,7 @@ void gt_rme_post_el_change(ARMCPU *cpu, void *opaque);
 #define ARM_AFF2_MASK  (0xFFULL << ARM_AFF2_SHIFT)
 #define ARM_AFF3_SHIFT 32
 #define ARM_AFF3_MASK  (0xFFULL << ARM_AFF3_SHIFT)
+#define ARM_MPIDR_MT   (1ULL << 24)
 #define ARM_DEFAULT_CPUS_PER_CLUSTER 8
 
 #define ARM32_AFFINITY_MASK (ARM_AFF0_MASK | ARM_AFF1_MASK | ARM_AFF2_MASK)
@@ -2125,6 +2134,7 @@ enum arm_features {
     ARM_FEATURE_CACHE_DIRTY_REG, /* 1136/1176 cache dirty status register */
     ARM_FEATURE_CACHE_BLOCK_OPS, /* v6 optional cache block operations */
     ARM_FEATURE_MPIDR, /* has cp15 MPIDR */
+    ARM_FEATURE_MPIDR_MT, /* MPIDR_EL1 reports multithreaded affinities */
     ARM_FEATURE_LPAE, /* has Large Physical Address Extension */
     ARM_FEATURE_V8,
     ARM_FEATURE_AARCH64, /* supports 64 bit mode */

@@ -111,6 +111,14 @@ ExportedFct('memory_region_init_ram_ptr', 'void',
         [ 'MemoryRegion *', 'Object *', 'const char *', 'uint64_t', 'void *' ],
         iothread_locked = True)
 
+ExportedFct('libqemu_memory_region_init_ram_from_fd', 'bool',
+        [ 'MemoryRegion *', 'Object *', 'const char *', 'uint64_t', 'int', 'uint64_t' ],
+        iothread_locked = True)
+
+ExportedFct('memory_region_set_readonly', 'void',
+        [ 'MemoryRegion *', 'bool' ],
+        iothread_locked = True)
+
 ExportedFct('iommu_memory_region_new', 'IOMMUMemoryRegion *',
         [], priv = 'libqemu_iommu_memory_region_new',
         iothread_locked = True)
@@ -321,6 +329,8 @@ PublicInclude('libqemu/wrappers/cpu.h')
 ExportedFct('cpu_loop', 'void', [ 'Object *' ], priv = 'libqemu_cpu_loop')
 ExportedFct('cpu_loop_is_busy', 'bool', [ 'Object *' ], priv = 'libqemu_cpu_loop_is_busy')
 ExportedFct('cpu_can_run', 'bool', [ 'Object *' ], priv = 'libqemu_cpu_can_run')
+ExportedFct('cpu_get_run_state', 'uint64_t', [ 'Object *' ],
+        priv = 'libqemu_cpu_get_run_state')
 ExportedFct('cpu_register_thread', 'void', [ 'Object *' ], priv = 'libqemu_cpu_register_thread')
 ExportedFct('cpu_kick', 'void', [ 'Object *' ], priv = 'qemu_cpu_kick')
 ExportedFct('cpu_reset', 'void', [ 'Object *', 'bool' ],
@@ -342,6 +352,7 @@ ExportedFct('cpu_restore_state', 'bool', [ 'Object *', 'uintptr_t', 'bool'])
 ExportedFct('cpu_loop_exit_noexc', 'void', [ 'Object *' ])
 ExportedFct('cpu_in_exclusive_context', 'bool', [ 'const Object *'])
 ExportedFct('cpu_get_index', 'int', [ 'const Object *' ], priv = 'libqemu_cpu_get_index')
+ExportedFct('cpu_get_pc', 'uintptr_t', [ 'Object *' ], priv = 'libqemu_cpu_get_pc')
 ExportedFct('cpu_get_mem_io_pc', 'uintptr_t', [ 'Object *' ], priv = 'libqemu_cpu_get_mem_io_pc')
 ExportedFct('cpu_set_vcpu_dirty', 'void', [ 'Object *', 'bool' ],
         priv = 'libqemu_cpu_set_vcpu_dirty')
@@ -423,10 +434,20 @@ ExportedFct('cpu_arm_get_exclusive_val', 'uint64_t', [ 'const Object *' ],
         priv = 'libqemu_cpu_arm_get_exclusive_val', arch = 'aarch64')
 ExportedFct('cpu_arm_set_exclusive_val', 'void', [ 'Object *', 'uint64_t' ],
         priv = 'libqemu_cpu_arm_set_exclusive_val', arch = 'aarch64')
+ExportedFct('cpu_arm_set_power_state', 'void', [ 'Object *', 'bool' ],
+        priv = 'libqemu_cpu_arm_set_power_state', arch = 'aarch64')
+ExportedFct('cpu_arm_get_power_state', 'int', [ 'Object *' ],
+        priv = 'libqemu_cpu_arm_get_power_state', arch = 'aarch64')
+ExportedFct('cpu_arm_power_on_and_reset', 'int', [ 'Object *' ],
+        priv = 'libqemu_cpu_arm_power_on_and_reset', arch = 'aarch64')
 ExportedFct('cpu_arm_post_init', 'void', [ 'Object *' ],
         priv = 'libqemu_cpu_arm_post_init', arch = 'aarch64')
 ExportedFct('cpu_arm_register_reset', 'void', [ 'Object *' ],
         priv = 'libqemu_cpu_arm_register_reset', arch = 'aarch64')
+ExportedFct('cpu_arm_v7m_get_state', 'uint64_t', [ 'Object *', 'int' ],
+        priv = 'libqemu_cpu_arm_v7m_get_state', arch = 'aarch64')
+ExportedFct('cpu_arm_aarch64_get_state', 'uint64_t', [ 'Object *', 'int' ],
+        priv = 'libqemu_cpu_arm_aarch64_get_state', arch = 'aarch64')
 
 # RISC-V specific exports
 PublicInclude('libqemu/wrappers/target/riscv.h')
