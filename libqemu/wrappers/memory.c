@@ -59,6 +59,13 @@ MemoryRegion* libqemu_memory_region_new(void)
     return g_new0(MemoryRegion, 1);
 }
 
+bool libqemu_memory_region_init_ram_from_fd(MemoryRegion *mr, Object *obj,
+                                            const char *name, uint64_t size,
+                                            int fd, uint64_t offset)
+{
+    return memory_region_init_ram_from_fd(mr, obj, name, size, RAM_SHARED, fd, offset, NULL);
+}
+
 MemTxResult libqemu_memory_region_dispatch_read(MemoryRegion *mr, hwaddr addr, uint64_t *data,
                                                 unsigned int size, MemTxAttrs attrs)
 {

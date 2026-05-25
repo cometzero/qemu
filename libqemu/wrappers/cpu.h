@@ -21,12 +21,14 @@
 #define _LIBQEMU_WRAPPERS_CPU_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 typedef void (*LibQemuAsyncCpuJobFn)(void *);
 
 void libqemu_cpu_loop(Object *cpu);
 bool libqemu_cpu_loop_is_busy(Object *cpu);
 bool libqemu_cpu_can_run(Object *cpu);
+uint64_t libqemu_cpu_get_run_state(Object *cpu);
 void libqemu_cpu_register_thread(Object *cpu);
 void libqemu_cpu_reset(Object *cpu, bool reset);
 void libqemu_system_reset(void);
@@ -42,6 +44,7 @@ void libqemu_async_run_on_cpu(Object *cpu, LibQemuAsyncCpuJobFn, void *arg);
 void libqemu_async_safe_run_on_cpu(Object *cpu, LibQemuAsyncCpuJobFn, void *arg);
 
 int libqemu_cpu_get_index(const Object *obj);
+uintptr_t libqemu_cpu_get_pc(Object *cpu);
 uintptr_t libqemu_cpu_get_mem_io_pc(Object *cpu);
 
 void libqemu_vm_stop_paused(void);

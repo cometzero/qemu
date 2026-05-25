@@ -88,6 +88,38 @@ bool libqemu_cpu_can_run(Object *obj)
     return false;
 }
 
+uint64_t libqemu_cpu_get_run_state(Object *obj)
+{
+    CPUState *cpu = CPU(obj);
+    uint64_t state = 0;
+
+    g_assert(cpu);
+
+    if (cpu->stop) {
+        state |= 1ULL << 0;
+    }
+    if (cpu->stopped) {
+        state |= 1ULL << 1;
+    }
+    if (cpu->soft_stopped) {
+        state |= 1ULL << 2;
+    }
+    if (cpu->halted) {
+        state |= 1ULL << 3;
+    }
+    if (!QSIMPLEQ_EMPTY(&cpu->work_list)) {
+        state |= 1ULL << 4;
+    }
+    if (cpu_has_work(cpu)) {
+        state |= 1ULL << 5;
+    }
+    if (cpu->exit_request) {
+        state |= 1ULL << 6;
+    }
+
+    return state;
+}
+
 void libqemu_cpu_register_thread(Object *obj)
 {
     CPUState *cpu = CPU(obj);
@@ -221,6 +253,18 @@ void libqemu_cpu_set_unplug(Object *obj, bool unplug)
 int libqemu_cpu_get_index(const Object *obj)
 {
     return CPU(obj)->cpu_index;
+}
+
+uintptr_t libqemu_cpu_get_pc(Object *obj)
+{
+    CPUState *cpu = CPU(obj);
+    CPUClass *cc = CPU_GET_CLASS(cpu);
+
+    if (!cc->get_pc) {
+        return 0;
+    }
+
+    return cc->get_pc(cpu);
 }
 
 uintptr_t libqemu_cpu_get_mem_io_pc(Object *obj)

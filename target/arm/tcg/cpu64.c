@@ -1058,6 +1058,15 @@ static const ARMCPRegInfo cortex_a720ae_dsu_pmu_cp_reginfo[] = {
      * provide a no-counter DSU PMU register bank to let Linux bind the driver
      * without taking undefined sysreg traps.
      */
+    { .name = "CLUSTERPWRCTLR_EL1", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 3, .opc2 = 5,
+      .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0x70 },
+    { .name = "CLUSTERPWRDN_EL1", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 3, .opc2 = 6,
+      .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
+    { .name = "CLUSTERPMMDCR_EL3", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 6, .crn = 15, .crm = 6, .opc2 = 3,
+      .access = PL3_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
     { .name = "CLUSTERPMCR_EL1", .state = ARM_CP_STATE_AA64,
       .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 5, .opc2 = 0,
       .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0x40 },
@@ -1114,6 +1123,7 @@ static void aarch64_a720ae_initfn(Object *obj)
     SET_IDREG(isar, ID_AA64MMFR0, t);
     cpu->dtb_compatible = "arm,cortex-a720ae";
     cpu->midr = 0x410FD890;          /* r0p0 */
+    set_feature(&cpu->env, ARM_FEATURE_MPIDR_MT);
     define_arm_cp_regs(cpu, cortex_a720ae_dsu_pmu_cp_reginfo);
 }
 
