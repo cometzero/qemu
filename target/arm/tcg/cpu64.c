@@ -1477,6 +1477,64 @@ void aarch64_max_tcg_initfn(Object *obj)
     qdev_property_add_static(DEVICE(obj), &arm_cpu_lpa2_property);
 }
 
+static void aarch64_cortex_r82_initfn(Object *obj)
+{
+    ARMCPU *cpu = ARM_CPU(obj);
+    ARMISARegisters *isar = &cpu->isar;
+
+    cpu->dtb_compatible = "arm,cortex-r82";
+    set_feature(&cpu->env, ARM_FEATURE_V8);
+    set_feature(&cpu->env, ARM_FEATURE_AARCH64);
+    set_feature(&cpu->env, ARM_FEATURE_EL2);
+    set_feature(&cpu->env, ARM_FEATURE_PMSA);
+    set_feature(&cpu->env, ARM_FEATURE_NEON);
+    set_feature(&cpu->env, ARM_FEATURE_GENERIC_TIMER);
+    set_feature(&cpu->env, ARM_FEATURE_PMU);
+
+    cpu->midr = 0x410fd150; /* Arm implementer, Cortex-R82 part number. */
+    cpu->revidr = 0;
+    cpu->ctr = 0x8444c004;
+    cpu->reset_sctlr = 0x00c50838;
+    cpu->pmsav7_dregion = 16;
+    cpu->pmsav8r_hdregion = 16;
+
+    SET_IDREG(isar, CLIDR, 0x0a200023);
+    set_dczid_bs(cpu, 4);
+
+    SET_IDREG(isar, ID_AA64PFR0, 0x00000222);
+    SET_IDREG(isar, ID_AA64PFR1, 0);
+    SET_IDREG(isar, ID_AA64DFR0, 0x10305106);
+    SET_IDREG(isar, ID_AA64DFR1, 0);
+    SET_IDREG(isar, ID_AA64ISAR0, 0x00011120);
+    SET_IDREG(isar, ID_AA64ISAR1, 0);
+    /*
+     * QEMU v11 does not name the Armv8-R MSA/MSA_FRAC fields. Set
+     * bits [51:48] and [55:52] so Apollo SI firmware detects EL2 PMSA.
+     */
+    SET_IDREG(isar, ID_AA64MMFR0, 0x0011000000101122ull);
+    SET_IDREG(isar, ID_AA64MMFR1, 0);
+    SET_IDREG(isar, ID_AA64MMFR2, 0);
+
+    cpu->ccsidr[0] = make_ccsidr(CCSIDR_FORMAT_LEGACY, 4, 64, 32 * KiB, 7);
+    cpu->ccsidr[1] = make_ccsidr(CCSIDR_FORMAT_LEGACY, 4, 64, 32 * KiB, 2);
+    cpu->ccsidr[2] = make_ccsidr(CCSIDR_FORMAT_LEGACY, 16, 64, 512 * KiB, 7);
+
+    cpu->gic_num_lrs = 4;
+    cpu->gic_vpribits = 5;
+    cpu->gic_vprebits = 5;
+    cpu->gic_pribits = 5;
+
+    cpu->isar.dbgdidr = 0x3516d000;
+    cpu->isar.dbgdevid = 0x00110f13;
+    cpu->isar.dbgdevid1 = 0x2;
+    cpu->isar.reset_pmcr_el0 = 0x41153000;
+
+    cpu->reset_fpsid = 0x41034043;
+    cpu->isar.mvfr0 = 0x10110222;
+    cpu->isar.mvfr1 = 0x12111111;
+    cpu->isar.mvfr2 = 0x00000043;
+}
+
 static const ARMCPUInfo aarch64_cpus[] = {
     { .name = "cortex-a35",         .initfn = aarch64_a35_initfn },
     { .name = "cortex-a55",         .initfn = aarch64_a55_initfn },
@@ -1489,6 +1547,7 @@ static const ARMCPUInfo aarch64_cpus[] = {
     { .name = "cortex-a78ae",       .initfn = aarch64_a78ae_initfn },
     { .name = "cortex-a710",        .initfn = aarch64_a710_initfn },
     { .name = "cortex-a720ae",      .initfn = aarch64_a720ae_initfn },
+    { .name = "cortex-r82",         .initfn = aarch64_cortex_r82_initfn },
     { .name = "a64fx",              .initfn = aarch64_a64fx_initfn },
     { .name = "neoverse-n1",        .initfn = aarch64_neoverse_n1_initfn },
     { .name = "neoverse-v1",        .initfn = aarch64_neoverse_v1_initfn },

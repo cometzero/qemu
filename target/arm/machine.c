@@ -662,9 +662,9 @@ static const VMStateDescription vmstate_pmsav8r = {
     .needed = pmsav8r_needed,
     .fields = (const VMStateField[]) {
         VMSTATE_VARRAY_UINT32(env.pmsav8.hprbar, ARMCPU,
-                        pmsav8r_hdregion, 0, vmstate_info_uint32, uint32_t),
+                        pmsav8r_hdregion, 0, vmstate_info_uint64, uint64_t),
         VMSTATE_VARRAY_UINT32(env.pmsav8.hprlar, ARMCPU,
-                        pmsav8r_hdregion, 0, vmstate_info_uint32, uint32_t),
+                        pmsav8r_hdregion, 0, vmstate_info_uint64, uint64_t),
         VMSTATE_END_OF_LIST()
     },
 };
@@ -676,9 +676,9 @@ static const VMStateDescription vmstate_pmsav8 = {
     .needed = pmsav8_needed,
     .fields = (const VMStateField[]) {
         VMSTATE_VARRAY_UINT32(env.pmsav8.rbar[M_REG_NS], ARMCPU, pmsav7_dregion,
-                              0, vmstate_info_uint32, uint32_t),
+                              0, vmstate_info_uint64, uint64_t),
         VMSTATE_VARRAY_UINT32(env.pmsav8.rlar[M_REG_NS], ARMCPU, pmsav7_dregion,
-                              0, vmstate_info_uint32, uint32_t),
+                              0, vmstate_info_uint64, uint64_t),
         VMSTATE_UINT32(env.pmsav8.mair0[M_REG_NS], ARMCPU),
         VMSTATE_UINT32(env.pmsav8.mair1[M_REG_NS], ARMCPU),
         VMSTATE_END_OF_LIST()
@@ -728,9 +728,9 @@ static const VMStateDescription vmstate_m_security = {
         VMSTATE_UINT32(env.pmsav8.mair0[M_REG_S], ARMCPU),
         VMSTATE_UINT32(env.pmsav8.mair1[M_REG_S], ARMCPU),
         VMSTATE_VARRAY_UINT32(env.pmsav8.rbar[M_REG_S], ARMCPU, pmsav7_dregion,
-                              0, vmstate_info_uint32, uint32_t),
+                              0, vmstate_info_uint64, uint64_t),
         VMSTATE_VARRAY_UINT32(env.pmsav8.rlar[M_REG_S], ARMCPU, pmsav7_dregion,
-                              0, vmstate_info_uint32, uint32_t),
+                              0, vmstate_info_uint64, uint64_t),
         VMSTATE_UINT32(env.pmsav7.rnr[M_REG_S], ARMCPU),
         VMSTATE_VALIDATE("secure MPU_RNR is valid", s_rnr_vmstate_validate),
         VMSTATE_UINT32(env.v7m.mpu_ctrl[M_REG_S], ARMCPU),

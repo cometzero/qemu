@@ -2520,7 +2520,7 @@ static void hprenr_write(CPUARMState *env, const ARMCPRegInfo *ri,
     /* Register alias is only valid for first 32 indexes */
     for (n = 0; n < rmax; ++n) {
         bit = extract32(value, n, 1);
-        env->pmsav8.hprlar[n] = deposit32(
+        env->pmsav8.hprlar[n] = deposit64(
                     env->pmsav8.hprlar[n], 0, 1, bit);
     }
 }
@@ -2646,6 +2646,19 @@ static const ARMCPRegInfo pmsav8r_cp_reginfo[] = {
       .cp = 15, .opc1 = 4, .crn = 6, .crm = 1, .opc2 = 1,
       .access = PL2_RW, .type = ARM_CP_NO_RAW,
       .readfn = hprenr_read, .writefn = hprenr_write },
+    { .name = "PRBAR_EL2", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 4, .crn = 6, .crm = 8, .opc2 = 0,
+      .access = PL2_RW, .type = ARM_CP_NO_RAW,
+      .readfn = hprbar_read, .writefn = hprbar_write },
+    { .name = "PRLAR_EL2", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 4, .crn = 6, .crm = 8, .opc2 = 1,
+      .access = PL2_RW, .type = ARM_CP_NO_RAW,
+      .readfn = hprlar_read, .writefn = hprlar_write },
+    { .name = "PRSELR_EL2", .state = ARM_CP_STATE_AA64, .resetvalue = 0,
+      .opc0 = 3, .opc1 = 4, .crn = 6, .crm = 2, .opc2 = 1,
+      .access = PL2_RW,
+      .writefn = hprselr_write,
+      .fieldoffset = offsetof(CPUARMState, pmsav8.hprselr) },
 };
 
 static const ARMCPRegInfo pmsav7_cp_reginfo[] = {
@@ -7297,6 +7310,12 @@ void register_cp_regs_for_features(ARMCPU *cpu)
             .access = PL2_R, .type = ARM_CP_CONST,
             .resetvalue = cpu->pmsav8r_hdregion
         };
+        ARMCPRegInfo id_mpuir_el2_reginfo = {
+            .name = "MPUIR_EL2", .state = ARM_CP_STATE_AA64,
+            .opc0 = 3, .opc1 = 4, .crn = 0, .crm = 0, .opc2 = 4,
+            .access = PL2_R, .type = ARM_CP_CONST,
+            .resetvalue = cpu->pmsav8r_hdregion
+        };
         static const ARMCPRegInfo crn0_wi_reginfo = {
             .name = "CRN0_WI", .cp = 15, .crn = 0, .crm = CP_ANY,
             .opc1 = CP_ANY, .opc2 = CP_ANY, .access = PL1_W,
@@ -7351,6 +7370,7 @@ void register_cp_regs_for_features(ARMCPU *cpu)
 
             define_one_arm_cp_reg(cpu, &id_mpuir_reginfo);
             define_one_arm_cp_reg(cpu, &id_hmpuir_reginfo);
+            define_one_arm_cp_reg(cpu, &id_mpuir_el2_reginfo);
             define_arm_cp_regs(cpu, pmsav8r_cp_reginfo);
 
             /* Register alias is only valid for first 32 indexes */

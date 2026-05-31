@@ -2787,7 +2787,7 @@ static bool get_phys_addr_pmsav7(CPUARMState *env,
     return (ptw->in_prot_check & ~result->f.prot) != 0;
 }
 
-static uint32_t *regime_rbar(CPUARMState *env, ARMMMUIdx mmu_idx,
+static uint64_t *regime_rbar(CPUARMState *env, ARMMMUIdx mmu_idx,
                              uint32_t secure)
 {
     if (regime_el(mmu_idx) == 2) {
@@ -2797,7 +2797,7 @@ static uint32_t *regime_rbar(CPUARMState *env, ARMMMUIdx mmu_idx,
     }
 }
 
-static uint32_t *regime_rlar(CPUARMState *env, ARMMMUIdx mmu_idx,
+static uint64_t *regime_rlar(CPUARMState *env, ARMMMUIdx mmu_idx,
                              uint32_t secure)
 {
     if (regime_el(mmu_idx) == 2) {
@@ -2807,7 +2807,7 @@ static uint32_t *regime_rlar(CPUARMState *env, ARMMMUIdx mmu_idx,
     }
 }
 
-bool pmsav8_mpu_lookup(CPUARMState *env, uint32_t address,
+bool pmsav8_mpu_lookup(CPUARMState *env, vaddr address,
                        MMUAccessType access_type, unsigned prot_check,
                        ARMMMUIdx mmu_idx, bool secure,
                        GetPhysAddrResult *result,
@@ -2828,8 +2828,8 @@ bool pmsav8_mpu_lookup(CPUARMState *env, uint32_t address,
     int n;
     int matchregion = -1;
     bool hit = false;
-    uint32_t addr_page_base = address & TARGET_PAGE_MASK;
-    uint32_t addr_page_limit = addr_page_base + (TARGET_PAGE_SIZE - 1);
+    hwaddr addr_page_base = address & TARGET_PAGE_MASK;
+    hwaddr addr_page_limit = addr_page_base | (TARGET_PAGE_SIZE - 1);
     int region_counter;
 
     if (regime_el(mmu_idx) == 2) {
@@ -2866,7 +2866,7 @@ bool pmsav8_mpu_lookup(CPUARMState *env, uint32_t address,
             hit = true;
         }
 
-        uint32_t bitmask;
+        hwaddr bitmask;
         if (arm_feature(env, ARM_FEATURE_M)) {
             bitmask = 0x1f;
         } else {
@@ -2882,8 +2882,8 @@ bool pmsav8_mpu_lookup(CPUARMState *env, uint32_t address,
              * [31:x] from the register with bits [x:0] all ones. Where x is
              * 5 for Cortex-M and 6 for Cortex-R
              */
-            uint32_t base = regime_rbar(env, mmu_idx, secure)[n] & ~bitmask;
-            uint32_t limit = regime_rlar(env, mmu_idx, secure)[n] | bitmask;
+            hwaddr base = regime_rbar(env, mmu_idx, secure)[n] & ~bitmask;
+            hwaddr limit = regime_rlar(env, mmu_idx, secure)[n] | bitmask;
 
             if (!(regime_rlar(env, mmu_idx, secure)[n] & 0x1)) {
                 /* Region disabled */
@@ -2943,14 +2943,14 @@ bool pmsav8_mpu_lookup(CPUARMState *env, uint32_t address,
         /* hit using the background region */
         get_phys_addr_pmsav7_default(env, mmu_idx, address, &result->f.prot);
     } else {
-        uint32_t matched_rbar = regime_rbar(env, mmu_idx, secure)[matchregion];
-        uint32_t matched_rlar = regime_rlar(env, mmu_idx, secure)[matchregion];
-        uint32_t ap = extract32(matched_rbar, 1, 2);
-        uint32_t xn = extract32(matched_rbar, 0, 1);
+        uint64_t matched_rbar = regime_rbar(env, mmu_idx, secure)[matchregion];
+        uint64_t matched_rlar = regime_rlar(env, mmu_idx, secure)[matchregion];
+        uint32_t ap = extract64(matched_rbar, 1, 2);
+        uint32_t xn = extract64(matched_rbar, 0, 1);
         bool pxn = false;
 
         if (arm_feature(env, ARM_FEATURE_V8_1M)) {
-            pxn = extract32(matched_rlar, 4, 1);
+            pxn = extract64(matched_rlar, 4, 1);
         }
 
         if (m_is_system_region(env, address)) {
@@ -2966,9 +2966,9 @@ bool pmsav8_mpu_lookup(CPUARMState *env, uint32_t address,
         }
 
         if (!arm_feature(env, ARM_FEATURE_M)) {
-            uint8_t attrindx = extract32(matched_rlar, 1, 3);
+            uint8_t attrindx = extract64(matched_rlar, 1, 3);
             uint64_t mair = env->cp15.mair_el[regime_el(mmu_idx)];
-            uint8_t sh = extract32(matched_rlar, 3, 2);
+            uint8_t sh = extract64(matched_rlar, 3, 2);
 
             if (regime_sctlr(env, mmu_idx) & SCTLR_WXN &&
                 result->f.prot & PAGE_WRITE && mmu_idx != ARMMMUIdx_Stage2) {
@@ -3128,7 +3128,7 @@ void v8m_security_lookup(CPUARMState *env, uint32_t address,
 
 static bool get_phys_addr_pmsav8(CPUARMState *env,
                                  S1Translate *ptw,
-                                 uint32_t address,
+                                 vaddr address,
                                  MMUAccessType access_type,
                                  GetPhysAddrResult *result,
                                  ARMMMUFaultInfo *fi)

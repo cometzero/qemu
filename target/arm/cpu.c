@@ -2097,11 +2097,11 @@ static void arm_cpu_realizefn(DeviceState *dev, Error **errp)
         if (nr) {
             if (arm_feature(env, ARM_FEATURE_V8)) {
                 /* PMSAv8 */
-                env->pmsav8.rbar[M_REG_NS] = g_new0(uint32_t, nr);
-                env->pmsav8.rlar[M_REG_NS] = g_new0(uint32_t, nr);
+                env->pmsav8.rbar[M_REG_NS] = g_new0(uint64_t, nr);
+                env->pmsav8.rlar[M_REG_NS] = g_new0(uint64_t, nr);
                 if (arm_feature(env, ARM_FEATURE_M_SECURITY)) {
-                    env->pmsav8.rbar[M_REG_S] = g_new0(uint32_t, nr);
-                    env->pmsav8.rlar[M_REG_S] = g_new0(uint32_t, nr);
+                    env->pmsav8.rbar[M_REG_S] = g_new0(uint64_t, nr);
+                    env->pmsav8.rlar[M_REG_S] = g_new0(uint64_t, nr);
                 }
             } else {
                 env->pmsav7.drbar = g_new0(uint32_t, nr);
@@ -2117,9 +2117,9 @@ static void arm_cpu_realizefn(DeviceState *dev, Error **errp)
         }
 
         if (cpu->pmsav8r_hdregion) {
-            env->pmsav8.hprbar = g_new0(uint32_t,
+            env->pmsav8.hprbar = g_new0(uint64_t,
                                         cpu->pmsav8r_hdregion);
-            env->pmsav8.hprlar = g_new0(uint32_t,
+            env->pmsav8.hprlar = g_new0(uint64_t,
                                         cpu->pmsav8r_hdregion);
         }
     }
