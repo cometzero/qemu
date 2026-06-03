@@ -1297,6 +1297,15 @@ static CPAccessResult gt_stimer_access(CPUARMState *env,
     }
 }
 
+static bool arm_is_v8r_el2_sel2(CPUARMState *env)
+{
+    ARMCPU *cpu = env_archcpu(env);
+
+    return arm_feature(env, ARM_FEATURE_PMSA) &&
+           !arm_feature(env, ARM_FEATURE_EL3) &&
+           cpu_isar_feature(aa64_sel2, cpu);
+}
+
 static CPAccessResult gt_sel2timer_access(CPUARMState *env,
                                           const ARMCPRegInfo *ri,
                                           bool isread)
@@ -1320,7 +1329,7 @@ static CPAccessResult gt_sel2timer_access(CPUARMState *env,
         /* UNDEFINED */
         return CP_ACCESS_UNDEFINED;
     case 2:
-        if (!arm_is_secure(env)) {
+        if (!arm_is_secure(env) && !arm_is_v8r_el2_sel2(env)) {
             /* UNDEFINED */
             return CP_ACCESS_UNDEFINED;
         }
@@ -2849,9 +2858,6 @@ static const ARMCPRegInfo vmsa_pmsa_cp_reginfo[] = {
       .vhe_redir_to_el01 = ENCODE_AA64_CP_REG(3, 5, 6, 0, 0),
       .fieldoffset = offsetof(CPUARMState, cp15.far_el[1]),
       .resetvalue = 0, },
-};
-
-static const ARMCPRegInfo vmsa_cp_reginfo[] = {
     { .name = "ESR_EL1", .state = ARM_CP_STATE_AA64,
       .opc0 = 3, .crn = 5, .crm = 2, .opc1 = 0, .opc2 = 0,
       .access = PL1_RW, .accessfn = access_tvm_trvm,
@@ -2860,6 +2866,9 @@ static const ARMCPRegInfo vmsa_cp_reginfo[] = {
       .vhe_redir_to_el2 = ENCODE_AA64_CP_REG(3, 4, 5, 2, 0),
       .vhe_redir_to_el01 = ENCODE_AA64_CP_REG(3, 5, 5, 2, 0),
       .fieldoffset = offsetof(CPUARMState, cp15.esr_el[1]), .resetvalue = 0, },
+};
+
+static const ARMCPRegInfo vmsa_cp_reginfo[] = {
     { .name = "TTBR0_EL1", .state = ARM_CP_STATE_BOTH,
       .opc0 = 3, .opc1 = 0, .crn = 2, .crm = 0, .opc2 = 0,
       .access = PL1_RW, .accessfn = access_tvm_trvm,
@@ -4371,7 +4380,8 @@ static const ARMCPRegInfo el2_v8_cp_reginfo[] = {
 static CPAccessResult sel2_access(CPUARMState *env, const ARMCPRegInfo *ri,
                                   bool isread)
 {
-    if (arm_current_el(env) == 3 || arm_is_secure_below_el3(env)) {
+    if (arm_current_el(env) == 3 || arm_is_secure_below_el3(env) ||
+        arm_is_v8r_el2_sel2(env)) {
         return CP_ACCESS_OK;
     }
     return CP_ACCESS_UNDEFINED;

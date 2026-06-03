@@ -1501,12 +1501,42 @@ static void aarch64_cortex_r82_initfn(Object *obj)
     SET_IDREG(isar, CLIDR, 0x0a200023);
     set_dczid_bs(cpu, 4);
 
-    SET_IDREG(isar, ID_AA64PFR0, 0x00000222);
+    /*
+     * Armv8-R firmware uses the Secure EL2 physical timer registers during
+     * early EL2 setup. Advertise FEAT_SEL2 so QEMU registers CNTHPS_*_EL2.
+     */
+    SET_IDREG(isar, ID_AA64PFR0, 0x0000001000000222ull);
     SET_IDREG(isar, ID_AA64PFR1, 0);
     SET_IDREG(isar, ID_AA64DFR0, 0x10305106);
     SET_IDREG(isar, ID_AA64DFR1, 0);
-    SET_IDREG(isar, ID_AA64ISAR0, 0x00011120);
+    /*
+     * The Apollo Safety Island Zephyr image is built with AArch64 LSE atomic
+     * instructions such as CASAL. Advertise FEAT_LSE so TCG translates them
+     * instead of taking an undefined-instruction exception during scheduler
+     * startup.
+     */
+    SET_IDREG(isar, ID_AA64ISAR0, 0x00211120);
     SET_IDREG(isar, ID_AA64ISAR1, 0);
+    /*
+     * Cortex-R82 advertises AArch32 support in ID_AA64PFR0. Keep the
+     * AArch32 ID registers consistent with that so TCG feature propagation
+     * does not trip the Armv7VE ID_ISAR0 divide check.
+     */
+    SET_IDREG(isar, ID_PFR0, 0x00000131);
+    SET_IDREG(isar, ID_PFR1, 0x10111001);
+    SET_IDREG(isar, ID_DFR0, 0x03010006);
+    SET_IDREG(isar, ID_AFR0, 0x00000000);
+    SET_IDREG(isar, ID_MMFR0, 0x00211040);
+    SET_IDREG(isar, ID_MMFR1, 0x40000000);
+    SET_IDREG(isar, ID_MMFR2, 0x01200000);
+    SET_IDREG(isar, ID_MMFR3, 0xf0102211);
+    SET_IDREG(isar, ID_MMFR4, 0x00000010);
+    SET_IDREG(isar, ID_ISAR0, 0x02101110);
+    SET_IDREG(isar, ID_ISAR1, 0x13112111);
+    SET_IDREG(isar, ID_ISAR2, 0x21232142);
+    SET_IDREG(isar, ID_ISAR3, 0x01112131);
+    SET_IDREG(isar, ID_ISAR4, 0x00010142);
+    SET_IDREG(isar, ID_ISAR5, 0x00010001);
     /*
      * QEMU v11 does not name the Armv8-R MSA/MSA_FRAC fields. Set
      * bits [51:48] and [55:52] so Apollo SI firmware detects EL2 PMSA.
