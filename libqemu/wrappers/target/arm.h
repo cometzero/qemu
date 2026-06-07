@@ -39,6 +39,7 @@ int libqemu_cpu_arm_power_on_and_reset(Object *cpu);
 void libqemu_cpu_arm_post_init(Object *obj);
 void libqemu_cpu_arm_register_reset(Object *cpu);
 uint64_t libqemu_cpu_arm_v7m_get_state(Object *cpu, int field);
+bool libqemu_cpu_arm_v7m_set_state(Object *cpu, int field, uint64_t value);
 uint64_t libqemu_cpu_arm_aarch64_get_state(Object *cpu, int field);
 
 #endif

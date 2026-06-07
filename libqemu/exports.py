@@ -132,7 +132,9 @@ ExportedFct('memory_region_add_subregion', 'void',
         iothread_locked = True)
 
 ExportedFct('memory_region_add_subregion_overlap', 'void',
-        [ 'MemoryRegion *', 'hwaddr' , 'MemoryRegion *', 'int' ], iothread_locked = True)
+        [ 'MemoryRegion *', 'hwaddr' , 'MemoryRegion *', 'int' ],
+        priv = 'libqemu_memory_region_add_subregion_overlap',
+        iothread_locked = True)
 
 ExportedFct('memory_region_del_subregion', 'void',
         [ 'MemoryRegion *', 'MemoryRegion *' ],
@@ -374,6 +376,8 @@ ExportedFct('char_dev_new', 'Chardev *', [ 'const char *', 'const char *' ],
 PublicInclude('libqemu/wrappers/libqemu.h')
 ExportedFct('set_cpu_end_of_loop_cb', 'void', [ 'LibQemuCpuEndOfLoopFn', 'void *' ],
         priv = 'libqemu_set_cpu_end_of_loop_cb')
+ExportedFct('set_cpu_pc_entry_cb', 'void', [ 'LibQemuCpuPcEntryFn', 'void *' ],
+        priv = 'libqemu_set_cpu_pc_entry_cb')
 ExportedFct('set_cpu_kick_cb', 'void', [ 'LibQemuCpuKickFn', 'void *' ],
         priv = 'libqemu_set_cpu_kick_cb')
 ExportedFct('set_iommu_translate_cb', 'void',
@@ -433,6 +437,8 @@ ExportedFct('cpu_arm_register_reset', 'void', [ 'Object *' ],
         priv = 'libqemu_cpu_arm_register_reset', arch = 'aarch64')
 ExportedFct('cpu_arm_v7m_get_state', 'uint64_t', [ 'Object *', 'int' ],
         priv = 'libqemu_cpu_arm_v7m_get_state', arch = 'aarch64')
+ExportedFct('cpu_arm_v7m_set_state', 'bool', [ 'Object *', 'int', 'uint64_t' ],
+        priv = 'libqemu_cpu_arm_v7m_set_state', arch = 'aarch64')
 ExportedFct('cpu_arm_aarch64_get_state', 'uint64_t', [ 'Object *', 'int' ],
         priv = 'libqemu_cpu_arm_aarch64_get_state', arch = 'aarch64')
 

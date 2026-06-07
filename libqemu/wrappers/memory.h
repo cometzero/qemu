@@ -80,6 +80,10 @@ void libqemu_memory_listener_set_map_cb(MemoryListener *ml, LibQemuMlMapCb cb);
 void libqemu_memory_region_add_subregion(MemoryRegion *mr,
                                  hwaddr offset,
                                  MemoryRegion *subregion);
+void libqemu_memory_region_add_subregion_overlap(MemoryRegion *mr,
+                                 hwaddr offset,
+                                 MemoryRegion *subregion,
+                                 int priority);
 void libqemu_memory_region_del_subregion(MemoryRegion *mr,
                                  MemoryRegion *subregion);
 
