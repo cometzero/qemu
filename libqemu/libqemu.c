@@ -38,6 +38,8 @@ int main(int argc, const char *const argv[], char **envp);
 
 typedef struct LibQemuContext LibQemuContext;
 
+#define LIBQEMU_CPU_PC_ENTRY_WATCH_MAX 16
+
 struct LibQemuContext {
     LibQemuExports exports;
     QemuThread iothread;
@@ -54,6 +56,11 @@ struct LibQemuContext {
         LibQemuCpuPcEntryFn cb;
         void *opaque;
     } cpu_pc_entry_cb;
+
+    struct {
+        uint64_t pcs[LIBQEMU_CPU_PC_ENTRY_WATCH_MAX];
+        unsigned int count;
+    } cpu_pc_entry_watches;
 
     struct {
         LibQemuCpuKickFn cb;
@@ -180,9 +187,40 @@ void libqemu_set_cpu_pc_entry_cb(LibQemuCpuPcEntryFn cb, void *opaque)
     context.cpu_pc_entry_cb.opaque = opaque;
 }
 
+void libqemu_add_cpu_pc_entry_watch(uint64_t pc)
+{
+    unsigned int i;
+
+    if (pc == 0) {
+        return;
+    }
+
+    for (i = 0; i < context.cpu_pc_entry_watches.count; ++i) {
+        if (context.cpu_pc_entry_watches.pcs[i] == pc) {
+            return;
+        }
+    }
+
+    if (context.cpu_pc_entry_watches.count >= LIBQEMU_CPU_PC_ENTRY_WATCH_MAX) {
+        return;
+    }
+
+    context.cpu_pc_entry_watches.pcs[context.cpu_pc_entry_watches.count++] = pc;
+}
+
+void libqemu_clear_cpu_pc_entry_watches(void)
+{
+    context.cpu_pc_entry_watches.count = 0;
+}
+
 bool libqemu_cpu_pc_entry_cb_enabled(void)
 {
     return context.cpu_pc_entry_cb.cb != NULL;
+}
+
+bool libqemu_cpu_pc_entry_watches_enabled(void)
+{
+    return context.cpu_pc_entry_watches.count != 0;
 }
 
 bool libqemu_cpu_pc_entry_cb(CPUState *cpu, uint64_t pc)
@@ -192,6 +230,22 @@ bool libqemu_cpu_pc_entry_cb(CPUState *cpu, uint64_t pc)
 
     if (cb) {
         return cb((QemuObject *)cpu, pc, opaque);
+    }
+    return false;
+}
+
+bool libqemu_cpu_pc_entry_watch_same_page(uint64_t pc, uint64_t page_mask)
+{
+    unsigned int i;
+
+    if (context.cpu_pc_entry_watches.count == 0) {
+        return false;
+    }
+
+    for (i = 0; i < context.cpu_pc_entry_watches.count; ++i) {
+        if (((pc ^ context.cpu_pc_entry_watches.pcs[i]) & page_mask) == 0) {
+            return true;
+        }
     }
     return false;
 }

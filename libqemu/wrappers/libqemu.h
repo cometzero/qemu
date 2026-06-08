@@ -21,15 +21,24 @@
 #define _LIBQEMU_WRAPPERS_LIBQEMU_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 typedef struct QemuObject QemuObject;
+typedef struct IOMMUMemoryRegion IOMMUMemoryRegion;
+typedef struct IOMMUTLBEntry IOMMUTLBEntry;
 
 typedef void (*LibQemuCpuEndOfLoopFn)(QemuObject *cpu, void *opaque);
 typedef bool (*LibQemuCpuPcEntryFn)(QemuObject *cpu, uint64_t pc, void *opaque);
 typedef void (*LibQemuCpuKickFn)(QemuObject *cpu, void *opaque);
+typedef IOMMUTLBEntry (*LibQemuIOMMUTranslateFn)(IOMMUMemoryRegion *mr,
+                                                void *opaque,
+                                                uint64_t addr, int flag,
+                                                int iommu_idx);
 
 void libqemu_set_cpu_end_of_loop_cb(LibQemuCpuEndOfLoopFn cb, void *opaque);
 void libqemu_set_cpu_pc_entry_cb(LibQemuCpuPcEntryFn cb, void *opaque);
+void libqemu_add_cpu_pc_entry_watch(uint64_t pc);
+void libqemu_clear_cpu_pc_entry_watches(void);
 void libqemu_set_cpu_kick_cb(LibQemuCpuKickFn cb, void *opaque);
 void libqemu_set_iommu_translate_cb(LibQemuIOMMUTranslateFn cb, void *opaque);
 

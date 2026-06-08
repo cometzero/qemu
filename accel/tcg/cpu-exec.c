@@ -958,14 +958,15 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
                 cpu->cflags_next_tb = -1;
             }
 
-            /*
-             * libqemu users can install a PC-entry callback for host-side
-             * acceleration of expensive guest routines. Disable direct TB
-             * chaining while it is active so function-entry PCs are observed
-             * reliably instead of being skipped inside a chained TB sequence.
-             */
-            if (libqemu_cpu_pc_entry_cb_enabled()) {
-                s.cflags |= CF_NO_GOTO_TB | CF_NO_GOTO_PTR;
+            if (libqemu_cpu_pc_entry_watch_same_page(s.pc, TARGET_PAGE_MASK)) {
+                s.cflags = (s.cflags & ~CF_COUNT_MASK) |
+                           CF_NO_GOTO_TB | CF_BP_PAGE | 1;
+            } else if (libqemu_cpu_pc_entry_cb_enabled()) {
+                if (libqemu_cpu_pc_entry_watches_enabled()) {
+                    s.cflags |= CF_NO_GOTO_TB;
+                } else {
+                    s.cflags |= CF_NO_GOTO_TB | CF_NO_GOTO_PTR;
+                }
             }
 
             if (libqemu_cpu_pc_entry_cb(cpu, s.pc)) {
