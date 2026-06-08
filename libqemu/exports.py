@@ -378,6 +378,24 @@ ExportedFct('set_cpu_end_of_loop_cb', 'void', [ 'LibQemuCpuEndOfLoopFn', 'void *
         priv = 'libqemu_set_cpu_end_of_loop_cb')
 ExportedFct('set_cpu_pc_entry_cb', 'void', [ 'LibQemuCpuPcEntryFn', 'void *' ],
         priv = 'libqemu_set_cpu_pc_entry_cb')
+ExportedFct('add_cpu_pc_entry_watch', 'void', [ 'uint64_t' ],
+        priv = 'libqemu_add_cpu_pc_entry_watch')
+ExportedFct('clear_cpu_pc_entry_watches', 'void', [],
+        priv = 'libqemu_clear_cpu_pc_entry_watches')
+ExportedFct('get_cpu_pc_entry_watch_count', 'uint64_t', [],
+        priv = 'libqemu_get_cpu_pc_entry_watch_count')
+ExportedFct('get_cpu_pc_entry_watch_add_calls', 'uint64_t', [],
+        priv = 'libqemu_get_cpu_pc_entry_watch_add_calls')
+ExportedFct('get_cpu_pc_entry_watch_clear_calls', 'uint64_t', [],
+        priv = 'libqemu_get_cpu_pc_entry_watch_clear_calls')
+ExportedFct('get_cpu_pc_entry_watch_match_queries', 'uint64_t', [],
+        priv = 'libqemu_get_cpu_pc_entry_watch_match_queries')
+ExportedFct('get_cpu_pc_entry_watch_match_hits', 'uint64_t', [],
+        priv = 'libqemu_get_cpu_pc_entry_watch_match_hits')
+ExportedFct('get_cpu_pc_entry_watch_last_pc', 'uint64_t', [],
+        priv = 'libqemu_get_cpu_pc_entry_watch_last_pc')
+ExportedFct('get_cpu_pc_entry_watch_last_watch_pc', 'uint64_t', [],
+        priv = 'libqemu_get_cpu_pc_entry_watch_last_watch_pc')
 ExportedFct('set_cpu_kick_cb', 'void', [ 'LibQemuCpuKickFn', 'void *' ],
         priv = 'libqemu_set_cpu_kick_cb')
 ExportedFct('set_iommu_translate_cb', 'void',

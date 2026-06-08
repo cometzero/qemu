@@ -973,6 +973,11 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
                 continue;
             }
 
+            if (libqemu_cpu_pc_entry_watch_same_page(s.pc, TARGET_PAGE_MASK)) {
+                s.cflags = (s.cflags & ~CF_COUNT_MASK) |
+                           CF_NO_GOTO_TB | CF_BP_PAGE | 1;
+            }
+
             if (check_for_breakpoints(cpu, s.pc, &s.cflags)) {
                 break;
             }

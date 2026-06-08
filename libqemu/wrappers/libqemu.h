@@ -30,6 +30,15 @@ typedef void (*LibQemuCpuKickFn)(QemuObject *cpu, void *opaque);
 
 void libqemu_set_cpu_end_of_loop_cb(LibQemuCpuEndOfLoopFn cb, void *opaque);
 void libqemu_set_cpu_pc_entry_cb(LibQemuCpuPcEntryFn cb, void *opaque);
+void libqemu_add_cpu_pc_entry_watch(uint64_t pc);
+void libqemu_clear_cpu_pc_entry_watches(void);
+uint64_t libqemu_get_cpu_pc_entry_watch_count(void);
+uint64_t libqemu_get_cpu_pc_entry_watch_add_calls(void);
+uint64_t libqemu_get_cpu_pc_entry_watch_clear_calls(void);
+uint64_t libqemu_get_cpu_pc_entry_watch_match_queries(void);
+uint64_t libqemu_get_cpu_pc_entry_watch_match_hits(void);
+uint64_t libqemu_get_cpu_pc_entry_watch_last_pc(void);
+uint64_t libqemu_get_cpu_pc_entry_watch_last_watch_pc(void);
 void libqemu_set_cpu_kick_cb(LibQemuCpuKickFn cb, void *opaque);
 void libqemu_set_iommu_translate_cb(LibQemuIOMMUTranslateFn cb, void *opaque);
 

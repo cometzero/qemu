@@ -38,6 +38,8 @@ int main(int argc, const char *const argv[], char **envp);
 
 typedef struct LibQemuContext LibQemuContext;
 
+#define LIBQEMU_CPU_PC_ENTRY_WATCH_MAX 16
+
 struct LibQemuContext {
     LibQemuExports exports;
     QemuThread iothread;
@@ -54,6 +56,17 @@ struct LibQemuContext {
         LibQemuCpuPcEntryFn cb;
         void *opaque;
     } cpu_pc_entry_cb;
+
+    struct {
+        uint64_t pcs[LIBQEMU_CPU_PC_ENTRY_WATCH_MAX];
+        unsigned int count;
+        uint64_t add_calls;
+        uint64_t clear_calls;
+        uint64_t match_queries;
+        uint64_t match_hits;
+        uint64_t last_pc;
+        uint64_t last_watch_pc;
+    } cpu_pc_entry_watches;
 
     struct {
         LibQemuCpuKickFn cb;
@@ -180,6 +193,71 @@ void libqemu_set_cpu_pc_entry_cb(LibQemuCpuPcEntryFn cb, void *opaque)
     context.cpu_pc_entry_cb.opaque = opaque;
 }
 
+void libqemu_add_cpu_pc_entry_watch(uint64_t pc)
+{
+    unsigned int i;
+
+    context.cpu_pc_entry_watches.add_calls++;
+
+    if (pc == 0) {
+        return;
+    }
+
+    for (i = 0; i < context.cpu_pc_entry_watches.count; ++i) {
+        if (context.cpu_pc_entry_watches.pcs[i] == pc) {
+            return;
+        }
+    }
+
+    if (context.cpu_pc_entry_watches.count >= LIBQEMU_CPU_PC_ENTRY_WATCH_MAX) {
+        return;
+    }
+
+    context.cpu_pc_entry_watches.pcs[context.cpu_pc_entry_watches.count++] = pc;
+}
+
+void libqemu_clear_cpu_pc_entry_watches(void)
+{
+    context.cpu_pc_entry_watches.clear_calls++;
+    context.cpu_pc_entry_watches.count = 0;
+    context.cpu_pc_entry_watches.last_watch_pc = 0;
+}
+
+uint64_t libqemu_get_cpu_pc_entry_watch_count(void)
+{
+    return context.cpu_pc_entry_watches.count;
+}
+
+uint64_t libqemu_get_cpu_pc_entry_watch_add_calls(void)
+{
+    return context.cpu_pc_entry_watches.add_calls;
+}
+
+uint64_t libqemu_get_cpu_pc_entry_watch_clear_calls(void)
+{
+    return context.cpu_pc_entry_watches.clear_calls;
+}
+
+uint64_t libqemu_get_cpu_pc_entry_watch_match_queries(void)
+{
+    return context.cpu_pc_entry_watches.match_queries;
+}
+
+uint64_t libqemu_get_cpu_pc_entry_watch_match_hits(void)
+{
+    return context.cpu_pc_entry_watches.match_hits;
+}
+
+uint64_t libqemu_get_cpu_pc_entry_watch_last_pc(void)
+{
+    return context.cpu_pc_entry_watches.last_pc;
+}
+
+uint64_t libqemu_get_cpu_pc_entry_watch_last_watch_pc(void)
+{
+    return context.cpu_pc_entry_watches.last_watch_pc;
+}
+
 bool libqemu_cpu_pc_entry_cb_enabled(void)
 {
     return context.cpu_pc_entry_cb.cb != NULL;
@@ -192,6 +270,27 @@ bool libqemu_cpu_pc_entry_cb(CPUState *cpu, uint64_t pc)
 
     if (cb) {
         return cb((QemuObject *)cpu, pc, opaque);
+    }
+    return false;
+}
+
+bool libqemu_cpu_pc_entry_watch_same_page(uint64_t pc, uint64_t page_mask)
+{
+    unsigned int i;
+
+    if (context.cpu_pc_entry_watches.count == 0) {
+        return false;
+    }
+
+    context.cpu_pc_entry_watches.match_queries++;
+    context.cpu_pc_entry_watches.last_pc = pc;
+    for (i = 0; i < context.cpu_pc_entry_watches.count; ++i) {
+        context.cpu_pc_entry_watches.last_watch_pc =
+            context.cpu_pc_entry_watches.pcs[i];
+        if (((pc ^ context.cpu_pc_entry_watches.pcs[i]) & page_mask) == 0) {
+            context.cpu_pc_entry_watches.match_hits++;
+            return true;
+        }
     }
     return false;
 }
