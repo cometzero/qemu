@@ -2,6 +2,8 @@ include(ExternalProject)
 
 find_package(Python COMPONENTS Interpreter REQUIRED)
 
+option(LIBQEMU_BUILD_ALWAYS "Always run the QEMU external project build step" OFF)
+
 set(QEMU_CONF_ARGS
     -Dlibqemu=true
     -Db_staticpic=true
@@ -192,7 +194,7 @@ ExternalProject_Add(qemu
         ${QEMU_CONF_ARGS}
     BUILD_COMMAND ${CMAKE_MAKE_PROGRAM}
     INSTALL_COMMAND ${CMAKE_MAKE_PROGRAM} install
-    BUILD_ALWAYS on
+    BUILD_ALWAYS ${LIBQEMU_BUILD_ALWAYS}
 )
 
 ExternalProject_Get_Property(qemu INSTALL_DIR)
