@@ -1924,6 +1924,19 @@ static void gicv3_arm_its_realize(DeviceState *dev, Error **errp)
     GICv3ITSState *s = ARM_GICV3_ITS_COMMON(dev);
     int i;
 
+    if (s->gicv4_1 && s->gicv3->revision < 4) {
+        error_setg(errp, "GICv4.1 ITS feature reporting requires GIC revision 4");
+        return;
+    }
+    if (s->gicv4_1_cte_size == 0 || s->gicv4_1_cte_size > 32) {
+        error_setg(errp, "gicv4-1-cte-size must be in range 1..32");
+        return;
+    }
+    if (s->gicv4_1_svpet > 3) {
+        error_setg(errp, "gicv4-1-svpet must be in range 0..3");
+        return;
+    }
+
     for (i = 0; i < s->gicv3->num_cpu; i++) {
         if (!(s->gicv3->cpu[i].gicr_typer & GICR_TYPER_PLPIS)) {
             error_setg(errp, "Physical LPI not supported by CPU %d", i);
@@ -1947,6 +1960,11 @@ static void gicv3_arm_its_realize(DeviceState *dev, Error **errp)
         /* Our VMOVP handles cross-ITS synchronization itself */
         s->typer = FIELD_DP64(s->typer, GITS_TYPER, VMOVP, 1);
         s->typer = FIELD_DP64(s->typer, GITS_TYPER, VIRTUAL, 1);
+    }
+    if (s->gicv4_1) {
+        s->typer = FIELD_DP64(s->typer, GITS_TYPER, VMAPP, 1);
+        s->typer = FIELD_DP64(s->typer, GITS_TYPER, SVPET,
+                              s->gicv4_1_svpet);
     }
 }
 
@@ -1982,7 +2000,8 @@ static void gicv3_its_reset_hold(Object *obj, ResetType type)
     s->baser[1] = FIELD_DP64(s->baser[1], GITS_BASER, PAGESIZE,
                              GITS_BASER_PAGESIZE_64K);
     s->baser[1] = FIELD_DP64(s->baser[1], GITS_BASER, ENTRYSIZE,
-                             GITS_CTE_SIZE - 1);
+                             (s->gicv4_1 ? s->gicv4_1_cte_size :
+                              GITS_CTE_SIZE) - 1);
 
     if (its_feature_virtual(s)) {
         s->baser[2] = FIELD_DP64(s->baser[2], GITS_BASER, TYPE,
@@ -2005,6 +2024,10 @@ static void gicv3_its_post_load(GICv3ITSState *s)
 static const Property gicv3_its_props[] = {
     DEFINE_PROP_LINK("parent-gicv3", GICv3ITSState, gicv3, "arm-gicv3",
                      GICv3State *),
+    DEFINE_PROP_BOOL("has-gicv4-1", GICv3ITSState, gicv4_1, 0),
+    DEFINE_PROP_UINT32("gicv4-1-svpet", GICv3ITSState, gicv4_1_svpet, 0),
+    DEFINE_PROP_UINT32("gicv4-1-cte-size", GICv3ITSState,
+                       gicv4_1_cte_size, GITS_CTE_SIZE),
 };
 
 static void gicv3_its_class_init(ObjectClass *klass, const void *data)
