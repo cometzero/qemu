@@ -204,6 +204,34 @@ static void test_non_monotonic_frame_offsets(void)
     timer_qtest_stop(&t);
 }
 
+static void test_64bit_cval_access(void)
+{
+    TimerQTest t = timer_qtest_start("");
+    QTestState *qts = t.qts;
+    uint64_t cval = 0x123456789abcdef0ULL;
+    uint64_t split_cval = 0x0fedcba987654321ULL;
+
+    qtest_writeq(qts, FRAME0_BASE + ARM_ARCH_TIMER_MMIO_CNTBASE_CNTP_CVAL_LO,
+                 cval);
+    g_assert_cmphex(qtest_readq(qts, FRAME0_BASE +
+                                ARM_ARCH_TIMER_MMIO_CNTBASE_CNTP_CVAL_LO),
+                    ==, cval);
+    g_assert_cmphex(qtest_readl(qts, FRAME0_BASE +
+                                ARM_ARCH_TIMER_MMIO_CNTBASE_CNTP_CVAL_LO),
+                    ==, extract64(cval, 0, 32));
+    g_assert_cmphex(qtest_readl(qts, FRAME0_BASE +
+                                ARM_ARCH_TIMER_MMIO_CNTBASE_CNTP_CVAL_HI),
+                    ==, extract64(cval, 32, 32));
+
+    timer_write64(qts, FRAME0_BASE, ARM_ARCH_TIMER_MMIO_CNTBASE_CNTP_CVAL_LO,
+                  split_cval);
+    g_assert_cmphex(qtest_readq(qts, FRAME0_BASE +
+                                ARM_ARCH_TIMER_MMIO_CNTBASE_CNTP_CVAL_LO),
+                    ==, split_cval);
+
+    timer_qtest_stop(&t);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
@@ -212,6 +240,8 @@ int main(int argc, char **argv)
                    test_shared_counter_independent_frames);
     qtest_add_func("/arm-arch-timer-mmio/non-monotonic-frame-offsets",
                    test_non_monotonic_frame_offsets);
+    qtest_add_func("/arm-arch-timer-mmio/64bit-cval-access",
+                   test_64bit_cval_access);
 
     return g_test_run();
 }

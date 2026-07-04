@@ -68,10 +68,22 @@ static uint64_t arm_arch_timer_mmio_read_counter_half(ArmArchTimerMMIOState *s,
 
 static uint64_t arm_arch_timer_mmio_read_frame(ArmArchTimerMMIOState *s,
                                                unsigned int idx,
-                                               hwaddr offset)
+                                               hwaddr offset,
+                                               unsigned int size)
 {
     ArmArchTimerMMIOFrame *f = &s->frame[idx];
     uint32_t ctl = f->ctl & ~ARM_ARCH_TIMER_MMIO_CNTP_CTL_ISTAT;
+
+    if (size == 8) {
+        switch (offset) {
+        case ARM_ARCH_TIMER_MMIO_CNTBASE_CNTPCT_LO:
+            return arm_arch_timer_mmio_counter(s);
+        case ARM_ARCH_TIMER_MMIO_CNTBASE_CNTP_CVAL_LO:
+            return f->cval;
+        default:
+            return 0;
+        }
+    }
 
     if (arm_arch_timer_mmio_frame_pending(s, f)) {
         ctl |= ARM_ARCH_TIMER_MMIO_CNTP_CTL_ISTAT;
@@ -102,9 +114,23 @@ static uint64_t arm_arch_timer_mmio_read_frame(ArmArchTimerMMIOState *s,
 
 static void arm_arch_timer_mmio_write_frame(ArmArchTimerMMIOState *s,
                                             unsigned int idx,
-                                            hwaddr offset, uint64_t value)
+                                            hwaddr offset, uint64_t value,
+                                            unsigned int size)
 {
     ArmArchTimerMMIOFrame *f = &s->frame[idx];
+
+    if (size == 8) {
+        switch (offset) {
+        case ARM_ARCH_TIMER_MMIO_CNTBASE_CNTP_CVAL_LO:
+            f->cval = value;
+            break;
+        default:
+            return;
+        }
+
+        arm_arch_timer_mmio_update_frame(s, idx);
+        return;
+    }
 
     switch (offset) {
     case ARM_ARCH_TIMER_MMIO_CNTBASE_CNTPL0ACR:
@@ -153,11 +179,15 @@ static uint64_t arm_arch_timer_mmio_read(void *opaque, hwaddr offset,
     hwaddr frame_off;
     int frame;
 
-    if (size != 4) {
+    if (size != 4 && size != 8) {
         return 0;
     }
 
     if (offset < CNTCTL_SIZE) {
+        if (size != 4) {
+            return 0;
+        }
+
         switch (offset) {
         case ARM_ARCH_TIMER_MMIO_CNTCTL_CNTFRQ:
             return s->cntfrq;
@@ -181,7 +211,7 @@ static uint64_t arm_arch_timer_mmio_read(void *opaque, hwaddr offset,
         return 0;
     }
 
-    return arm_arch_timer_mmio_read_frame(s, frame, frame_off);
+    return arm_arch_timer_mmio_read_frame(s, frame, frame_off, size);
 }
 
 static void arm_arch_timer_mmio_write(void *opaque, hwaddr offset,
@@ -191,11 +221,15 @@ static void arm_arch_timer_mmio_write(void *opaque, hwaddr offset,
     hwaddr frame_off;
     int frame;
 
-    if (size != 4) {
+    if (size != 4 && size != 8) {
         return;
     }
 
     if (offset < CNTCTL_SIZE) {
+        if (size != 4) {
+            return;
+        }
+
         if (offset >= ARM_ARCH_TIMER_MMIO_CNTCTL_CNTACR_BASE &&
             offset < ARM_ARCH_TIMER_MMIO_CNTCTL_CNTACR_BASE +
                      s->nr_frames * sizeof(uint32_t)) {
@@ -207,7 +241,7 @@ static void arm_arch_timer_mmio_write(void *opaque, hwaddr offset,
 
     frame = arm_arch_timer_mmio_frame_at(s, offset, &frame_off);
     if (frame >= 0) {
-        arm_arch_timer_mmio_write_frame(s, frame, frame_off, value);
+        arm_arch_timer_mmio_write_frame(s, frame, frame_off, value, size);
     }
 }
 
@@ -217,7 +251,7 @@ static const MemoryRegionOps arm_arch_timer_mmio_ops = {
     .endianness = DEVICE_NATIVE_ENDIAN,
     .valid = {
         .min_access_size = 4,
-        .max_access_size = 4,
+        .max_access_size = 8,
     },
 };
 
