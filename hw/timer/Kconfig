@@ -9,6 +9,9 @@ config ARM_MPTIMER
 config A9_GTIMER
     bool
 
+config ARM_ARCH_TIMER_MMIO
+    bool
+
 config HPET
     bool
     default y if PC
