@@ -144,7 +144,9 @@ ExportedFct('memory_region_add_subregion', 'void',
         iothread_locked = True)
 
 ExportedFct('memory_region_add_subregion_overlap', 'void',
-        [ 'MemoryRegion *', 'hwaddr' , 'MemoryRegion *', 'int' ], iothread_locked = True)
+        [ 'MemoryRegion *', 'hwaddr' , 'MemoryRegion *', 'int' ],
+        priv = 'libqemu_memory_region_add_subregion_overlap',
+        iothread_locked = True)
 
 ExportedFct('memory_region_del_subregion', 'void',
         [ 'MemoryRegion *', 'MemoryRegion *' ],

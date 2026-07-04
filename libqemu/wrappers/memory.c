@@ -293,6 +293,18 @@ void libqemu_memory_region_add_subregion(MemoryRegion *mr, hwaddr offset,
     }
 }
 
+void libqemu_memory_region_add_subregion_overlap(MemoryRegion *mr,
+                                                 hwaddr offset,
+                                                 MemoryRegion *subregion,
+                                                 int priority)
+{
+    memory_region_add_subregion_overlap(mr, offset, subregion, priority);
+
+    if (current_cpu != NULL) {
+        tlb_flush(current_cpu);
+    }
+}
+
 void libqemu_memory_region_del_subregion(MemoryRegion *mr,
                                          MemoryRegion *subregion)
 {
