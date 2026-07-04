@@ -240,6 +240,11 @@ struct GICv3State {
     bool lpi_enable;
     bool nmi_support;
     bool security_extn;
+    bool gicv4_1;
+    bool direct_lpi;
+    bool rvpeid;
+    bool vpend_valid_dirty;
+    uint32_t vpeid_bits;
     bool force_8bit_prio;
     bool irq_reset_nonsecure;
     bool gicd_no_migration_shift_bug;

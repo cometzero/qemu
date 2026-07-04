@@ -1948,6 +1948,11 @@ static void gicv3_arm_its_realize(DeviceState *dev, Error **errp)
         s->typer = FIELD_DP64(s->typer, GITS_TYPER, VMOVP, 1);
         s->typer = FIELD_DP64(s->typer, GITS_TYPER, VIRTUAL, 1);
     }
+    if (s->gicv4_1) {
+        s->typer = FIELD_DP64(s->typer, GITS_TYPER, VMAPP, 1);
+        s->typer = FIELD_DP64(s->typer, GITS_TYPER, SVPET,
+                              s->gicv4_1_svpet);
+    }
 }
 
 static void gicv3_its_reset_hold(Object *obj, ResetType type)
@@ -1982,7 +1987,8 @@ static void gicv3_its_reset_hold(Object *obj, ResetType type)
     s->baser[1] = FIELD_DP64(s->baser[1], GITS_BASER, PAGESIZE,
                              GITS_BASER_PAGESIZE_64K);
     s->baser[1] = FIELD_DP64(s->baser[1], GITS_BASER, ENTRYSIZE,
-                             GITS_CTE_SIZE - 1);
+                             (s->gicv4_1 ? s->gicv4_1_cte_size :
+                              GITS_CTE_SIZE) - 1);
 
     if (its_feature_virtual(s)) {
         s->baser[2] = FIELD_DP64(s->baser[2], GITS_BASER, TYPE,
@@ -2005,6 +2011,10 @@ static void gicv3_its_post_load(GICv3ITSState *s)
 static const Property gicv3_its_props[] = {
     DEFINE_PROP_LINK("parent-gicv3", GICv3ITSState, gicv3, "arm-gicv3",
                      GICv3State *),
+    DEFINE_PROP_BOOL("has-gicv4-1", GICv3ITSState, gicv4_1, 0),
+    DEFINE_PROP_UINT32("gicv4-1-svpet", GICv3ITSState, gicv4_1_svpet, 0),
+    DEFINE_PROP_UINT32("gicv4-1-cte-size", GICv3ITSState,
+                       gicv4_1_cte_size, GITS_CTE_SIZE),
 };
 
 static void gicv3_its_class_init(ObjectClass *klass, const void *data)

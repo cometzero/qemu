@@ -63,6 +63,10 @@ struct GICv3ITSState {
 
     GICv3State *gicv3;
 
+    bool gicv4_1;
+    uint32_t gicv4_1_svpet;
+    uint32_t gicv4_1_cte_size;
+
     int dev_fd; /* kvm device fd if backed by kvm vgic support */
     uint64_t gits_translater_gpa;
     bool translater_gpa_known;

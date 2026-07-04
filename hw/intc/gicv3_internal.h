@@ -74,6 +74,9 @@
 #define GICD_TYPER_NMI_SHIFT           9
 #define GICD_TYPER_LPIS_SHIFT          17
 
+#define GICD_TYPER2_VID                0x1f
+#define GICD_TYPER2_VIL                (1U << 7)
+
 /* 16 bits EventId */
 #define GICD_TYPER_IDBITS            0xf
 
@@ -129,9 +132,11 @@
 
 #define GICR_TYPER_PLPIS             (1U << 0)
 #define GICR_TYPER_VLPIS             (1U << 1)
+#define GICR_TYPER_DIRTY             (1U << 2)
 #define GICR_TYPER_DIRECTLPI         (1U << 3)
 #define GICR_TYPER_LAST              (1U << 4)
 #define GICR_TYPER_DPGS              (1U << 5)
+#define GICR_TYPER_RVPEID            (1U << 7)
 #define GICR_TYPER_PROCNUM           (0xFFFFU << 8)
 #define GICR_TYPER_COMMONLPIAFF      (0x3 << 24)
 #define GICR_TYPER_AFFINITYVALUE     (0xFFFFFFFFULL << 32)
@@ -323,6 +328,8 @@ FIELD(GITS_TYPER, PTA, 19, 1)
 FIELD(GITS_TYPER, CIDBITS, 32, 4)
 FIELD(GITS_TYPER, CIL, 36, 1)
 FIELD(GITS_TYPER, VMOVP, 37, 1)
+FIELD(GITS_TYPER, VMAPP, 40, 1)
+FIELD(GITS_TYPER, SVPET, 41, 2)
 
 #define GITS_IDREGS           0xFFD0
 

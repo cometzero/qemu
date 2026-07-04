@@ -400,7 +400,6 @@ static void arm_gicv3_common_realize(DeviceState *dev, Error **errp)
         error_setg(errp, "num-cpu must be at least 1");
         return;
     }
-
     /* ITLinesNumber is represented as (N / 32) - 1, so this is an
      * implementation imposed restriction, not an architectural one,
      * so we don't have to deal with bitfields where only some of the
@@ -453,7 +452,8 @@ static void arm_gicv3_common_realize(DeviceState *dev, Error **errp)
          *  DPGS == 0 (GICR_CTLR.DPG* not supported)
          *  Last == 1 if this is the last redistributor in a series of
          *            contiguous redistributor pages
-         *  DirectLPI == 0 (direct injection of LPIs not supported)
+         *  DirectLPI, Dirty and RVPEID are Apollo opt-in feature-reporting
+         *  bits used to match GIC-720AE boot-visible GICv4.1 discovery.
          *  VLPIS == 1 if vLPIs supported (GICv4 and up)
          *  PLPIS == 1 if LPIs supported
          */
@@ -472,6 +472,17 @@ static void arm_gicv3_common_realize(DeviceState *dev, Error **errp)
             s->cpu[i].gicr_typer |= GICR_TYPER_PLPIS;
             if (s->revision > 3) {
                 s->cpu[i].gicr_typer |= GICR_TYPER_VLPIS;
+            }
+            if (s->gicv4_1) {
+                if (s->direct_lpi) {
+                    s->cpu[i].gicr_typer |= GICR_TYPER_DIRECTLPI;
+                }
+                if (s->rvpeid) {
+                    s->cpu[i].gicr_typer |= GICR_TYPER_RVPEID;
+                }
+                if (s->vpend_valid_dirty) {
+                    s->cpu[i].gicr_typer |= GICR_TYPER_DIRTY;
+                }
             }
         }
     }
@@ -606,6 +617,12 @@ static const Property arm_gicv3_common_properties[] = {
     DEFINE_PROP_BOOL("has-lpi", GICv3State, lpi_enable, 0),
     DEFINE_PROP_BOOL("has-nmi", GICv3State, nmi_support, 0),
     DEFINE_PROP_BOOL("has-security-extensions", GICv3State, security_extn, 0),
+    DEFINE_PROP_BOOL("has-gicv4-1", GICv3State, gicv4_1, 0),
+    DEFINE_PROP_BOOL("has-direct-lpi", GICv3State, direct_lpi, 0),
+    DEFINE_PROP_BOOL("has-rvpeid", GICv3State, rvpeid, 0),
+    DEFINE_PROP_BOOL("has-vpend-valid-dirty", GICv3State,
+                     vpend_valid_dirty, 0),
+    DEFINE_PROP_UINT32("vpeid-bits", GICv3State, vpeid_bits, 16),
     DEFINE_PROP_UINT32("maintenance-interrupt-id", GICv3State, maint_irq, 0),
     /*
      * Compatibility property: force 8 bits of physical priority, even
