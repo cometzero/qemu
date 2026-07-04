@@ -1521,7 +1521,7 @@ bool get_phys_addr_for_at(CPUARMState *env, vaddr address, unsigned prot_check,
                           GetPhysAddrResult *result, ARMMMUFaultInfo *fi)
     __attribute__((nonnull));
 
-bool pmsav8_mpu_lookup(CPUARMState *env, uint32_t address,
+bool pmsav8_mpu_lookup(CPUARMState *env, vaddr address,
                        MMUAccessType access_type, unsigned prot_check,
                        ARMMMUIdx mmu_idx, bool is_secure,
                        GetPhysAddrResult *result,

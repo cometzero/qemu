@@ -2520,7 +2520,7 @@ static void hprenr_write(CPUARMState *env, const ARMCPRegInfo *ri,
     /* Register alias is only valid for first 32 indexes */
     for (n = 0; n < rmax; ++n) {
         bit = extract32(value, n, 1);
-        env->pmsav8.hprlar[n] = deposit32(
+        env->pmsav8.hprlar[n] = deposit64(
                     env->pmsav8.hprlar[n], 0, 1, bit);
     }
 }

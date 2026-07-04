@@ -799,10 +799,10 @@ typedef struct CPUArchState {
          *  pmsav7.rnr (region number register)
          *  pmsav7_dregion (number of configured regions)
          */
-        uint32_t *rbar[M_REG_NUM_BANKS];
-        uint32_t *rlar[M_REG_NUM_BANKS];
-        uint32_t *hprbar;
-        uint32_t *hprlar;
+        uint64_t *rbar[M_REG_NUM_BANKS];
+        uint64_t *rlar[M_REG_NUM_BANKS];
+        uint64_t *hprbar;
+        uint64_t *hprlar;
         uint32_t mair0[M_REG_NUM_BANKS];
         uint32_t mair1[M_REG_NUM_BANKS];
         uint32_t hprselr;
