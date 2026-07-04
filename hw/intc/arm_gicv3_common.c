@@ -400,6 +400,19 @@ static void arm_gicv3_common_realize(DeviceState *dev, Error **errp)
         error_setg(errp, "num-cpu must be at least 1");
         return;
     }
+    if (s->gicv4_1 && s->revision < 4) {
+        error_setg(errp, "GICv4.1 feature reporting requires revision 4");
+        return;
+    }
+    if ((s->rvpeid || s->direct_lpi || s->vpend_valid_dirty) && !s->gicv4_1) {
+        error_setg(errp, "GICv4.1 sub-features require has-gicv4-1");
+        return;
+    }
+    if (s->rvpeid && (s->vpeid_bits == 0 || s->vpeid_bits > 32)) {
+        error_setg(errp, "vpeid-bits must be in range 1..32");
+        return;
+    }
+
     /* ITLinesNumber is represented as (N / 32) - 1, so this is an
      * implementation imposed restriction, not an architectural one,
      * so we don't have to deal with bitfields where only some of the

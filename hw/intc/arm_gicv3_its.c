@@ -1924,6 +1924,19 @@ static void gicv3_arm_its_realize(DeviceState *dev, Error **errp)
     GICv3ITSState *s = ARM_GICV3_ITS_COMMON(dev);
     int i;
 
+    if (s->gicv4_1 && s->gicv3->revision < 4) {
+        error_setg(errp, "GICv4.1 ITS feature reporting requires GIC revision 4");
+        return;
+    }
+    if (s->gicv4_1_cte_size == 0 || s->gicv4_1_cte_size > 32) {
+        error_setg(errp, "gicv4-1-cte-size must be in range 1..32");
+        return;
+    }
+    if (s->gicv4_1_svpet > 3) {
+        error_setg(errp, "gicv4-1-svpet must be in range 0..3");
+        return;
+    }
+
     for (i = 0; i < s->gicv3->num_cpu; i++) {
         if (!(s->gicv3->cpu[i].gicr_typer & GICR_TYPER_PLPIS)) {
             error_setg(errp, "Physical LPI not supported by CPU %d", i);
