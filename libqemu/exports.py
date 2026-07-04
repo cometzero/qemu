@@ -448,6 +448,8 @@ ExportedFct('cpu_arm_register_reset', 'void', [ 'Object *' ],
         priv = 'libqemu_cpu_arm_register_reset', arch = 'aarch64')
 ExportedFct('cpu_arm_v7m_get_state', 'uint64_t', [ 'Object *', 'int' ],
         priv = 'libqemu_cpu_arm_v7m_get_state', arch = 'aarch64')
+ExportedFct('cpu_arm_v7m_set_state', 'bool', [ 'Object *', 'int', 'uint64_t' ],
+        priv = 'libqemu_cpu_arm_v7m_set_state', arch = 'aarch64')
 ExportedFct('cpu_arm_aarch64_get_state', 'uint64_t', [ 'Object *', 'int' ],
         priv = 'libqemu_cpu_arm_aarch64_get_state', arch = 'aarch64')
 

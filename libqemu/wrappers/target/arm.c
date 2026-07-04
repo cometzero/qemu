@@ -361,6 +361,54 @@ uint64_t libqemu_cpu_arm_v7m_get_state(Object *obj, int field)
     }
 }
 
+bool libqemu_cpu_arm_v7m_set_state(Object *obj, int field, uint64_t value)
+{
+    enum {
+        V7M_STATE_R0 = 0,
+        V7M_STATE_R1,
+        V7M_STATE_R2,
+        V7M_STATE_R3,
+        V7M_STATE_R4,
+        V7M_STATE_R5,
+        V7M_STATE_R6,
+        V7M_STATE_R7,
+        V7M_STATE_R8,
+        V7M_STATE_R9,
+        V7M_STATE_R10,
+        V7M_STATE_R11,
+        V7M_STATE_R12,
+        V7M_STATE_SP,
+        V7M_STATE_LR,
+        V7M_STATE_PC,
+    };
+    CPUState *cs = CPU(obj);
+    ARMCPU *cpu = ARM_CPU(obj);
+    CPUARMState *env = &cpu->env;
+
+    if (!arm_feature(env, ARM_FEATURE_M)) {
+        return false;
+    }
+
+    if (field >= V7M_STATE_R0 && field <= V7M_STATE_LR) {
+        env->regs[field] = (uint32_t)value;
+        return true;
+    }
+
+    if (field == V7M_STATE_PC) {
+        CPUClass *cc = CPU_GET_CLASS(cs);
+
+        if (cc->set_pc == NULL) {
+            env->regs[15] = (uint32_t)(value & ~1u);
+            env->thumb = value & 1u;
+        } else {
+            cc->set_pc(cs, value);
+        }
+        return true;
+    }
+
+    return false;
+}
+
 uint64_t libqemu_cpu_arm_aarch64_get_state(Object *obj, int field)
 {
     enum {
