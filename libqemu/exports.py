@@ -388,6 +388,8 @@ ExportedFct('char_dev_new', 'Chardev *', [ 'const char *', 'const char *' ],
 PublicInclude('libqemu/wrappers/libqemu.h')
 ExportedFct('set_cpu_end_of_loop_cb', 'void', [ 'LibQemuCpuEndOfLoopFn', 'void *' ],
         priv = 'libqemu_set_cpu_end_of_loop_cb')
+ExportedFct('set_cpu_pc_entry_cb', 'void', [ 'LibQemuCpuPcEntryFn', 'void *' ],
+        priv = 'libqemu_set_cpu_pc_entry_cb')
 ExportedFct('set_cpu_kick_cb', 'void', [ 'LibQemuCpuKickFn', 'void *' ],
         priv = 'libqemu_set_cpu_kick_cb')
 ExportedFct('set_iommu_translate_cb', 'void',

@@ -46,6 +46,7 @@
 #include "tb-context.h"
 #include "tb-internal.h"
 #include "internal-common.h"
+#include "libqemu/callbacks.h"
 
 /* -icount align implementation. */
 
@@ -955,6 +956,21 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
                 s.cflags = curr_cflags(cpu);
             } else {
                 cpu->cflags_next_tb = -1;
+            }
+
+            /*
+             * libqemu users can install a PC-entry callback for host-side
+             * acceleration of expensive guest routines. Disable direct TB
+             * chaining while it is active so function-entry PCs are observed
+             * reliably instead of being skipped inside a chained TB sequence.
+             */
+            if (libqemu_cpu_pc_entry_cb_enabled()) {
+                s.cflags |= CF_NO_GOTO_TB | CF_NO_GOTO_PTR;
+            }
+
+            if (libqemu_cpu_pc_entry_cb(cpu, s.pc)) {
+                last_tb = NULL;
+                continue;
             }
 
             if (check_for_breakpoints(cpu, s.pc, &s.cflags)) {

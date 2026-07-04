@@ -51,6 +51,11 @@ struct LibQemuContext {
     } cpu_end_of_loop_cb;
 
     struct {
+        LibQemuCpuPcEntryFn cb;
+        void *opaque;
+    } cpu_pc_entry_cb;
+
+    struct {
         LibQemuCpuKickFn cb;
         void *opaque;
     } cpu_kick_cb;
@@ -167,6 +172,28 @@ void libqemu_set_cpu_end_of_loop_cb(LibQemuCpuEndOfLoopFn cb, void *opaque)
 {
     context.cpu_end_of_loop_cb.cb = cb;
     context.cpu_end_of_loop_cb.opaque = opaque;
+}
+
+void libqemu_set_cpu_pc_entry_cb(LibQemuCpuPcEntryFn cb, void *opaque)
+{
+    context.cpu_pc_entry_cb.cb = cb;
+    context.cpu_pc_entry_cb.opaque = opaque;
+}
+
+bool libqemu_cpu_pc_entry_cb_enabled(void)
+{
+    return context.cpu_pc_entry_cb.cb != NULL;
+}
+
+bool libqemu_cpu_pc_entry_cb(CPUState *cpu, uint64_t pc)
+{
+    LibQemuCpuPcEntryFn cb = context.cpu_pc_entry_cb.cb;
+    void *opaque = context.cpu_pc_entry_cb.opaque;
+
+    if (cb) {
+        return cb((QemuObject *)cpu, pc, opaque);
+    }
+    return false;
 }
 
 void libqemu_cpu_end_of_loop_cb(CPUState *cpu)
