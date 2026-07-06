@@ -972,14 +972,14 @@ python="$(command -v "$python")"
 echo "python determined to be '$python'"
 echo "python version: $($python --version)"
 
-python="$($python -B "${source_path}/python/scripts/mkvenv.py" create pyvenv)"
+python=python3
 if test "$?" -ne 0 ; then
     error_exit "python venv creation failed"
 fi
 
 # Suppress writing compiled files
 python="$python -B"
-mkvenv="$python ${source_path}/python/scripts/mkvenv.py"
+mkvenv=true
 
 # Finish preparing the virtual environment using vendored .whl files.
 # Even if PyPI is allowed, we disallow it here to force installation
@@ -988,30 +988,7 @@ mkvenv="$python ${source_path}/python/scripts/mkvenv.py"
 $mkvenv ensuregroup --dir "${source_path}/python/wheels" \
      ${source_path}/pythondeps.toml meson || exit 1
 
-# At this point, we expect Meson to be installed and available.
-# We expect mkvenv or pip to have created pyvenv/bin/meson for us.
-# We ignore PATH completely here: we want to use the venv's Meson
-# *exclusively*.
-
-# for msys2
-get_pwd() {
-    if pwd -W >/dev/null 2>&1; then
-        pwd -W
-    else
-        pwd
-    fi
-}
-
-meson="$(cd pyvenv/bin; get_pwd)/meson"
-if [ -f "$meson$EXESUF" ]; then
-  meson="$meson$EXESUF"
-fi
-
-# On Haiku, meson might show up in a "non-packaged" subfolder instead, see
-# https://github.com/haiku/haiku/blob/r1beta5/docs/user/storage/storageintro.dox
-if test "$host_os" = "haiku" && test ! -e "$meson" ; then
-    meson="$(cd pyvenv/non-packaged/bin; get_pwd)/meson"
-fi
+meson=`which meson`
 
 mkvenv_online_flag=""
 if test "$download" = "enabled" ; then
