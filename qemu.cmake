@@ -3,6 +3,13 @@ include(ExternalProject)
 find_package(Python COMPONENTS Interpreter REQUIRED)
 
 option(LIBQEMU_BUILD_ALWAYS "Always run the QEMU external project build step" OFF)
+option(LIBQEMU_ENABLE_GTK "Build libqemu with GTK UI support" OFF)
+option(LIBQEMU_ENABLE_SDL_IMAGE "Build libqemu with SDL image support" OFF)
+set(LIBQEMU_PYTHON "" CACHE FILEPATH "Python interpreter used by QEMU configure")
+set(LIBQEMU_QEMU_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}" CACHE PATH
+    "QEMU source directory used by the libqemu external project")
+set(LIBQEMU_EXTRA_CONFIGURE_ARGS "" CACHE STRING
+    "Extra QEMU configure arguments as a semicolon-separated CMake list")
 
 set(QEMU_CONF_ARGS
     -Dlibqemu=true
@@ -55,6 +62,18 @@ set(QEMU_CONF_ARGS
     --enable-vhost-user
 )
 set(QEMU_CONF_ARGS ${QEMU_CONF_ARGS} --libdir=lib)
+
+if(LIBQEMU_ENABLE_GTK)
+    list(APPEND QEMU_CONF_ARGS --enable-gtk)
+else()
+    list(APPEND QEMU_CONF_ARGS --disable-gtk)
+endif()
+
+if(LIBQEMU_ENABLE_SDL_IMAGE)
+    list(APPEND QEMU_CONF_ARGS --enable-sdl-image)
+else()
+    list(APPEND QEMU_CONF_ARGS --disable-sdl-image)
+endif()
 
 if (GS_ENABLE_VIRCLRENDERER)
     if (WIN32)
@@ -127,6 +146,14 @@ if(QEMU_ENABLE_USB_REDIRECT)
      )
 endif()
 
+if(LIBQEMU_PYTHON)
+    set(QEMU_CONF_ARGS ${QEMU_CONF_ARGS} --python=${LIBQEMU_PYTHON})
+endif()
+
+if(LIBQEMU_EXTRA_CONFIGURE_ARGS)
+    list(APPEND QEMU_CONF_ARGS ${LIBQEMU_EXTRA_CONFIGURE_ARGS})
+endif()
+
 string(TOUPPER "${CMAKE_BUILD_TYPE}" CMAKE_BUILD_TYPE)
 message(STATUS "Build type : ${CMAKE_BUILD_TYPE}")
 if(CMAKE_BUILD_TYPE STREQUAL "DEBUG")
@@ -184,8 +211,8 @@ foreach(target ${LIBQEMU_TARGETS})
 endforeach()
 
 ExternalProject_Add(qemu
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}
-    CONFIGURE_COMMAND ${CONFIGURE_ENVIRONMENT_VARIABLE} ${CMAKE_CURRENT_SOURCE_DIR}/configure
+    SOURCE_DIR ${LIBQEMU_QEMU_SOURCE_DIR}
+    CONFIGURE_COMMAND ${CONFIGURE_ENVIRONMENT_VARIABLE} ${LIBQEMU_QEMU_SOURCE_DIR}/configure
         '--extra-ldflags=${ldflags}'
         '--extra-cflags=${cflags}'
         '--extra-cxxflags=${cxxflags}'

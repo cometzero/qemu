@@ -33,6 +33,7 @@ class PrivateInclude:
         self.arch = arch
         self.includes.append(self)
 
+    @staticmethod
     def gen():
         for i in PrivateInclude.includes:
             if i.arch:
@@ -49,6 +50,7 @@ class PublicInclude:
         self.path = path
         self.includes.append(self)
 
+    @staticmethod
     def gen():
         for i in PublicInclude.includes:
             gen_c('#include "{}"'.format(i.path))
@@ -67,16 +69,19 @@ class ExportedType:
     def gen_pub_typedef_decl(self):
         gen_c('typedef struct {pub} {pub};'.format(pub = self.pub))
 
+    @staticmethod
     def gen_pub_typedef_decls():
         for t in ExportedType.types.values():
             t.gen_pub_typedef_decl()
 
+    @staticmethod
     def get_raw_type(t):
         raw = re.sub(r'\bconst\b', '', t)
         raw = re.sub(r'\*', '', raw).strip()
 
         return raw
 
+    @staticmethod
     def priv_to_pub(priv_type):
         raw = ExportedType.get_raw_type(priv_type)
 
@@ -135,6 +140,7 @@ class ExportedFct:
             args = self.format_args(fmt = '{pub_type}'))
         )
 
+    @staticmethod
     def gen_pub_typedef_decls():
         for f in ExportedFct.fcts.values():
             f.gen_pub_typedef_decl()
