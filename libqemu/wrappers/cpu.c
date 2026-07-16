@@ -142,6 +142,22 @@ void libqemu_cpu_reset(Object *obj, bool reset)
     if (reset) {
         cpu_pause(cpu);
         cpu_reset(cpu);
+    } else if (cpu_in_exclusive_context(cpu) || qemu_cpu_is_self(cpu)) {
+        /*
+         * A target-vCPU callback or async_safe_run_on_cpu() exclusive work
+         * item returns directly to the CPU event loop.  Kicking the CPU via
+         * cpu_resume() from either context sets a new exit_request after the
+         * work-item wake-up was consumed, so the first post-reset cpu_exec()
+         * exits without running a guest instruction.  Clear that stale
+         * loop-exit request and resume the state in place.  Wake an idle
+         * target without sending a vCPU kick, which would recreate the exit
+         * request.  Architectural interrupt state is held separately and
+         * will be reconsidered by cpu_exec().
+         */
+        qatomic_set(&cpu->exit_request, false);
+        cpu->stop = false;
+        cpu->stopped = false;
+        qemu_cond_broadcast(cpu->halt_cond);
     } else {
         cpu_resume(cpu);
     }
