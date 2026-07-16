@@ -458,52 +458,54 @@ analyze_funcs_generated = custom_target(
 )
 hexagon_ss.add(analyze_funcs_generated)
 
-cmake = import('cmake')
+if 'hexagon-linux-user' in target_dirs or 'hexagon-softmmu' in target_dirs
+  cmake = import('cmake')
 
-rpclib_cmake_opts = cmake.subproject_options()
-rpclib_cmake_opts.append_compile_args(
-  'cpp', '-Wno-unused-but-set-variable', '-Wno-unused-variable',
-  '-Wno-unused-function', '-std=gnu++17', '-fPIC'
-)
-
-if host_machine.system() == 'linux' or (host_machine.system() == 'windows' and host_machine.cpu_family() != 'aarch64')
+  rpclib_cmake_opts = cmake.subproject_options()
   rpclib_cmake_opts.append_compile_args(
-    'cpp', '-Wno-class-memaccess'
+    'cpp', '-Wno-unused-but-set-variable', '-Wno-unused-variable',
+    '-Wno-unused-function', '-std=gnu++17', '-fPIC'
   )
-endif
 
-if host_machine.system() == 'windows'
-  rpclib_cmake_opts.append_compile_args(
-    'cpp', '-DWINVER=0x0A00', '-D_WIN32_WINNT=0x0A00'
+  if host_machine.system() == 'linux' or (host_machine.system() == 'windows' and host_machine.cpu_family() != 'aarch64')
+    rpclib_cmake_opts.append_compile_args(
+      'cpp', '-Wno-class-memaccess'
+    )
+  endif
+
+  if host_machine.system() == 'windows'
+    rpclib_cmake_opts.append_compile_args(
+      'cpp', '-DWINVER=0x0A00', '-D_WIN32_WINNT=0x0A00'
+    )
+  endif
+
+  rpclib_proj = cmake.subproject('rpclib', options:rpclib_cmake_opts)
+  rpclib_dep = rpclib_proj.dependency('rpc')
+
+  coproc_lib = static_library(
+    'coproc',
+    files('coproc.h', 'coproc.cpp', 'coproc_trace.c'),
+    cpp_args: '-std=c++20',
+    include_directories : [
+      include_directories('../../include'),
+    ],
+    dependencies : [ rpclib_dep, glib ],
+    sources: [ genh, opcodes_def_generated ],
+    pic: true,
   )
+
+  coproc_link_args = [ qemu_ldflags ]
+  if 'CONFIG_WIN32' in config_host or host_os == 'windows'
+    coproc_link_args += [ '-static-libstdc++', '-static-libgcc' ]
+  endif
+
+  coproc_dep = declare_dependency(
+    link_with: coproc_lib,
+    link_args: coproc_link_args
+  )
+
+  hexagon_ss.add(coproc_dep)
 endif
-
-rpclib_proj = cmake.subproject('rpclib', options:rpclib_cmake_opts)
-rpclib_dep = rpclib_proj.dependency('rpc')
-
-coproc_lib = static_library(
-  'coproc',
-  files('coproc.h', 'coproc.cpp', 'coproc_trace.c'),
-  cpp_args: '-std=c++20',
-  include_directories : [
-    include_directories('../../include'),
-  ],
-  dependencies : [ rpclib_dep, glib ],
-  sources: [ genh, opcodes_def_generated ],
-  pic: true,
-)
-
-coproc_link_args = [ qemu_ldflags ]
-if 'CONFIG_WIN32' in config_host or host_os == 'windows'
-  coproc_link_args += [ '-static-libstdc++', '-static-libgcc' ]
-endif
-
-coproc_dep = declare_dependency(
-  link_with: coproc_lib,
-  link_args: coproc_link_args
-)
-
-hexagon_ss.add(coproc_dep)
 
 if 'CONFIG_WIN32' in config_host or host_os == 'windows'
   install_data(meson.project_source_root() / 'quic/install_win_deps.ps1',

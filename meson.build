@@ -4758,7 +4758,7 @@ subdir('docs')
 subdir('pyvenv')
 # Tests are disabled on emscripten because they rely on host features that aren't
 # supported by emscripten (e.g. fork and unix socket).
-if host_os != 'emscripten'
+if get_option('tests') and host_os != 'emscripten'
   subdir('tests')
 endif
 if gtk.found()

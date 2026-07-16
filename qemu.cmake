@@ -5,9 +5,13 @@ find_package(Python COMPONENTS Interpreter REQUIRED)
 option(LIBQEMU_BUILD_ALWAYS "Always run the QEMU external project build step" OFF)
 option(LIBQEMU_ENABLE_GTK "Build libqemu with GTK UI support" OFF)
 option(LIBQEMU_ENABLE_SDL_IMAGE "Build libqemu with SDL image support" OFF)
+option(LIBQEMU_USE_SYSTEM_FDT "Build libqemu with an externally provided libfdt" OFF)
+option(LIBQEMU_BUILD_TESTS "Build QEMU test programs" ON)
 set(LIBQEMU_PYTHON "" CACHE FILEPATH "Python interpreter used by QEMU configure")
 set(LIBQEMU_QEMU_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}" CACHE PATH
     "QEMU source directory used by the libqemu external project")
+set(LIBQEMU_KEYCODEMAPDB_SOURCE_DIR "" CACHE PATH
+    "External keycodemapdb source directory used by QEMU")
 set(LIBQEMU_EXTRA_CONFIGURE_ARGS "" CACHE STRING
     "Extra QEMU configure arguments as a semicolon-separated CMake list")
 
@@ -150,8 +154,21 @@ if(LIBQEMU_PYTHON)
     set(QEMU_CONF_ARGS ${QEMU_CONF_ARGS} --python=${LIBQEMU_PYTHON})
 endif()
 
+if(LIBQEMU_KEYCODEMAPDB_SOURCE_DIR)
+    list(APPEND QEMU_CONF_ARGS
+        --keycodemapdb-src=${LIBQEMU_KEYCODEMAPDB_SOURCE_DIR})
+endif()
+
 if(LIBQEMU_EXTRA_CONFIGURE_ARGS)
     list(APPEND QEMU_CONF_ARGS ${LIBQEMU_EXTRA_CONFIGURE_ARGS})
+endif()
+
+if(LIBQEMU_USE_SYSTEM_FDT)
+    list(APPEND QEMU_CONF_ARGS --enable-fdt=system)
+endif()
+
+if(NOT LIBQEMU_BUILD_TESTS)
+    list(APPEND QEMU_CONF_ARGS --disable-tests)
 endif()
 
 string(TOUPPER "${CMAKE_BUILD_TYPE}" CMAKE_BUILD_TYPE)

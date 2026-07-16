@@ -38,6 +38,10 @@ option('coroutine_backend', type: 'combo',
        value: 'auto', description: 'coroutine backend to use')
 option('gdb', type: 'string', value: '',
        description: 'Path to GDB')
+option('keycodemapdb_src', type: 'string', value: '',
+       description: 'Path to an externally provided keycodemapdb source tree')
+option('tests', type: 'boolean', value: true,
+       description: 'Build QEMU test programs')
 
 # Everything else can be set via --enable/--disable-* option
 # on the configure script command line.  After adding an option

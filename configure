@@ -277,6 +277,7 @@ gdb_arches=""
 hexagon_lldb_bin=$(command -v "hexagon-lldb")
 assert_target_compiler=no
 qemu_testing_path=
+keycodemapdb_src=
 
 # Don't accept a target_list environment variable.
 unset target_list
@@ -772,6 +773,9 @@ for opt do
   ;;
   --qemu-testing-path=*) qemu_testing_path="$optarg"
   ;;
+  --keycodemapdb-src=*) keycodemapdb_src="$optarg"
+                         meson_option_parse "$opt" "$optarg"
+  ;;
   --enable-rust) rust=enabled
   ;;
   --disable-rust) rust=disabled
@@ -792,9 +796,15 @@ then
     git_submodules_action="validate"
 fi
 
-if ! test -f "$source_path/subprojects/keycodemapdb/README" \
-    && test "$download" = disabled
-then
+if test -n "$keycodemapdb_src"; then
+    if ! test -f "$keycodemapdb_src/README" \
+        || ! test -f "$keycodemapdb_src/data/keymaps.csv" \
+        || ! test -f "$keycodemapdb_src/tools/keymap-gen"
+    then
+        error_exit "invalid keycodemapdb source directory: $keycodemapdb_src"
+    fi
+elif ! test -f "$source_path/subprojects/keycodemapdb/README" \
+    && test "$download" = disabled; then
     echo
     echo "ERROR: missing subprojects"
     echo
