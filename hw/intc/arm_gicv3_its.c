@@ -182,7 +182,9 @@ static MemTxResult get_cte(GICv3ITSState *s, uint16_t icid, CTEntry *cte)
     AddressSpace *as = &s->gicv3->dma_as;
     MemTxResult res = MEMTX_OK;
     uint64_t entry_addr = table_entry_addr(s, &s->ct, icid, &res);
-    uint64_t cteval;
+    uint8_t entry[32] = {};
+    uint64_t cteval = 0;
+    unsigned int i;
 
     if (entry_addr == -1) {
         /* No L2 table entry, i.e. no valid CTE, or a memory error */
@@ -190,9 +192,13 @@ static MemTxResult get_cte(GICv3ITSState *s, uint16_t icid, CTEntry *cte)
         goto out;
     }
 
-    cteval = address_space_ldq_le(as, entry_addr, MEMTXATTRS_UNSPECIFIED, &res);
+    res = address_space_read(as, entry_addr, MEMTXATTRS_UNSPECIFIED,
+                             entry, s->ct.entry_sz);
     if (res != MEMTX_OK) {
         goto out;
+    }
+    for (i = 0; i < MIN(s->ct.entry_sz, sizeof(cteval)); ++i) {
+        cteval |= (uint64_t)entry[i] << (i * 8);
     }
     cte->valid = FIELD_EX64(cteval, CTE, VALID);
     cte->rdbase = FIELD_EX64(cteval, CTE, RDBASE);
@@ -734,7 +740,9 @@ static bool update_cte(GICv3ITSState *s, uint16_t icid, const CTEntry *cte)
     AddressSpace *as = &s->gicv3->dma_as;
     uint64_t entry_addr;
     uint64_t cteval = 0;
+    uint8_t entry[32] = {};
     MemTxResult res = MEMTX_OK;
+    unsigned int i;
 
     trace_gicv3_its_cte_write(icid, cte->valid, cte->rdbase);
 
@@ -754,7 +762,11 @@ static bool update_cte(GICv3ITSState *s, uint16_t icid, const CTEntry *cte)
         return true;
     }
 
-    address_space_stq_le(as, entry_addr, cteval, MEMTXATTRS_UNSPECIFIED, &res);
+    for (i = 0; i < MIN(s->ct.entry_sz, sizeof(cteval)); ++i) {
+        entry[i] = extract64(cteval, i * 8, 8);
+    }
+    res = address_space_write(as, entry_addr, MEMTXATTRS_UNSPECIFIED,
+                              entry, s->ct.entry_sz);
     return res == MEMTX_OK;
 }
 
