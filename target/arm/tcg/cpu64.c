@@ -1118,9 +1118,25 @@ static void aarch64_a720ae_initfn(Object *obj)
     uint64_t t;
 
     aarch64_a710_initfn(obj);
+
+    t = GET_IDREG(isar, ID_AA64PFR0);
+    t = FIELD_DP64(t, ID_AA64PFR0, EL0, 1);
+    SET_IDREG(isar, ID_AA64PFR0, t);
+
     t = GET_IDREG(isar, ID_AA64MMFR0);
     t = FIELD_DP64(t, ID_AA64MMFR0, PARANGE, 5); /* 48-bit PA */
+    t = FIELD_DP64(t, ID_AA64MMFR0, FGT, 1);
+    t = FIELD_DP64(t, ID_AA64MMFR0, ECV, 2);
     SET_IDREG(isar, ID_AA64MMFR0, t);
+
+    t = GET_IDREG(isar, ID_AA64MMFR1);
+    t = FIELD_DP64(t, ID_AA64MMFR1, PAN, 3);
+    SET_IDREG(isar, ID_AA64MMFR1, t);
+
+    t = GET_IDREG(isar, ID_AA64ISAR2);
+    t = FIELD_DP64(t, ID_AA64ISAR2, WFXT, 2);
+    SET_IDREG(isar, ID_AA64ISAR2, t);
+
     cpu->dtb_compatible = "arm,cortex-a720ae";
     cpu->midr = 0x410FD890;          /* r0p0 */
     set_feature(&cpu->env, ARM_FEATURE_MPIDR_MT);
