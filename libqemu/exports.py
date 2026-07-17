@@ -381,6 +381,7 @@ ExportedFct('timer_del', 'void', [ 'QemuTimer *' ])
 PrivateInclude('system/ram_addr.h')
 PrivateInclude('exec/translation-block.h')
 ExportedFct('tb_invalidate_phys_range', 'void', [ 'uint64_t', 'uint64_t' ])
+ExportedFct('libqemu_tlb_flush_all_cpus', 'void', [ 'Object *' ])
 
 PrivateInclude('libqemu/wrappers/chardev.h')
 ExportedType('QemuChardev', 'Chardev')

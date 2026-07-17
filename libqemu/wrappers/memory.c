@@ -255,6 +255,12 @@ void libqemu_address_space_update_topology(AddressSpace *as)
     address_space_update_topology(as);
 }
 
+void libqemu_tlb_flush_all_cpus(Object *obj)
+{
+    CPUState *cpu = CPU(obj);
+    tlb_flush_all_cpus_synced(cpu);
+}
+
 AddressSpace *libqemu_address_space_get_system_memory(void)
 {
     return &address_space_memory;
