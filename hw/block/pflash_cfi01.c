@@ -44,10 +44,12 @@
 #include "system/block-backend.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
+#include "qemu/bitmap.h"
 #include "qemu/bitops.h"
 #include "qemu/host-utils.h"
 #include "qemu/log.h"
 #include "qemu/option.h"
+#include "qemu/timer.h"
 #include "hw/core/sysbus.h"
 #include "migration/vmstate.h"
 #include "system/blockdev.h"
@@ -84,13 +86,36 @@ struct PFlashCFI01 {
     char *name;
     void *storage;
     VMChangeStateEntry *vmstate;
+    bool program_ff_erases_sector;
+    bool io_mode_only;
+    bool defer_backing_write;
+    uint64_t defer_backing_flush_interval;
+    uint64_t defer_backing_flush_delay_ms;
+    uint64_t next_deferred_flush;
+    QEMUTimer deferred_flush_timer;
+    unsigned long *dirty_sector_map;
+    uint64_t backing_sector_count;
+    uint64_t deferred_update_ops;
 
     /* block update buffer */
     unsigned char *blk_bytes;
     uint32_t blk_offset;
 };
 
+static void pflash_set_romd(PFlashCFI01 *pfl, bool romd)
+{
+    if (!pfl->io_mode_only) {
+        memory_region_rom_device_set_romd(&pfl->mem, romd);
+    }
+}
+
 static int pflash_post_load(void *opaque, int version_id);
+static int pflash_flush_deferred(PFlashCFI01 *pfl);
+
+static int pflash_pre_save(void *opaque)
+{
+    return pflash_flush_deferred(opaque);
+}
 
 static bool pflash_blk_write_state_needed(void *opaque)
 {
@@ -115,6 +140,7 @@ static const VMStateDescription vmstate_pflash = {
     .name = "pflash_cfi01",
     .version_id = 1,
     .minimum_version_id = 1,
+    .pre_save = pflash_pre_save,
     .post_load = pflash_post_load,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT8(wcycle, PFlashCFI01),
@@ -381,23 +407,97 @@ static uint32_t pflash_read(PFlashCFI01 *pfl, hwaddr offset,
     return ret;
 }
 
+static int pflash_write_backing(PFlashCFI01 *pfl, int offset, int size)
+{
+    int ret;
+
+    ret = blk_pwrite(pfl->blk, offset, size, pfl->storage + offset, 0);
+    if (ret < 0) {
+        /* TODO set error bit in status */
+        error_report("Could not update PFLASH: %s", strerror(-ret));
+    }
+    return ret;
+}
+
+static int pflash_flush_deferred(PFlashCFI01 *pfl)
+{
+    unsigned long sector = 0;
+    int ret = 0;
+
+    if (!pfl->blk || !pfl->dirty_sector_map) {
+        return 0;
+    }
+
+    timer_del(&pfl->deferred_flush_timer);
+    while (sector < pfl->backing_sector_count) {
+        unsigned long end;
+        int offset;
+        int size;
+
+        sector = find_next_bit(pfl->dirty_sector_map,
+                               pfl->backing_sector_count, sector);
+        if (sector >= pfl->backing_sector_count) {
+            break;
+        }
+        end = find_next_zero_bit(pfl->dirty_sector_map,
+                                 pfl->backing_sector_count, sector);
+        offset = sector * BDRV_SECTOR_SIZE;
+        size = (end - sector) * BDRV_SECTOR_SIZE;
+        ret = pflash_write_backing(pfl, offset, size);
+        if (ret < 0) {
+            break;
+        }
+        bitmap_clear(pfl->dirty_sector_map, sector, end - sector);
+        sector = end;
+    }
+    return ret;
+}
+
+static void pflash_deferred_flush_timer(void *opaque)
+{
+    PFlashCFI01 *pfl = opaque;
+
+    pflash_flush_deferred(pfl);
+}
+
+static void pflash_schedule_deferred_flush(PFlashCFI01 *pfl)
+{
+    if (!pfl->defer_backing_flush_delay_ms ||
+        timer_pending(&pfl->deferred_flush_timer)) {
+        return;
+    }
+    timer_mod(&pfl->deferred_flush_timer,
+              qemu_clock_get_ms(QEMU_CLOCK_REALTIME) +
+              pfl->defer_backing_flush_delay_ms);
+}
+
 /* update flash content on disk */
-static void pflash_update(PFlashCFI01 *pfl, int offset,
-                          int size)
+static void pflash_update(PFlashCFI01 *pfl, int offset, int size)
 {
     int offset_end;
-    int ret;
-    if (pfl->blk) {
-        offset_end = offset + size;
-        /* widen to sector boundaries */
-        offset = QEMU_ALIGN_DOWN(offset, BDRV_SECTOR_SIZE);
-        offset_end = QEMU_ALIGN_UP(offset_end, BDRV_SECTOR_SIZE);
-        ret = blk_pwrite(pfl->blk, offset, offset_end - offset,
-                         pfl->storage + offset, 0);
-        if (ret < 0) {
-            /* TODO set error bit in status */
-            error_report("Could not update PFLASH: %s", strerror(-ret));
-        }
+
+    if (!pfl->blk) {
+        return;
+    }
+
+    offset_end = offset + size;
+    offset = QEMU_ALIGN_DOWN(offset, BDRV_SECTOR_SIZE);
+    offset_end = QEMU_ALIGN_UP(offset_end, BDRV_SECTOR_SIZE);
+    if (!pfl->defer_backing_write) {
+        pflash_write_backing(pfl, offset, offset_end - offset);
+        return;
+    }
+
+    bitmap_set(pfl->dirty_sector_map, offset / BDRV_SECTOR_SIZE,
+               (offset_end - offset) / BDRV_SECTOR_SIZE);
+    pfl->deferred_update_ops++;
+    if (pfl->defer_backing_flush_interval &&
+        pfl->deferred_update_ops >= pfl->next_deferred_flush) {
+        pflash_flush_deferred(pfl);
+        pfl->next_deferred_flush = pfl->deferred_update_ops +
+                                   pfl->defer_backing_flush_interval;
+    } else {
+        pflash_schedule_deferred_flush(pfl);
     }
 }
 
@@ -469,7 +569,7 @@ static void pflash_write(PFlashCFI01 *pfl, hwaddr offset,
     trace_pflash_io_write(pfl->name, offset, width, value, pfl->wcycle);
     if (!pfl->wcycle) {
         /* Set the device in I/O access mode */
-        memory_region_rom_device_set_romd(&pfl->mem, false);
+        pflash_set_romd(pfl, false);
     }
 
     switch (pfl->wcycle) {
@@ -485,7 +585,6 @@ static void pflash_write(PFlashCFI01 *pfl, hwaddr offset,
         case 0x20: /* Block erase */
             p = pfl->storage;
             offset &= ~(pfl->sector_len - 1);
-
             trace_pflash_write_block_erase(pfl->name, offset, pfl->sector_len);
 
             if (!pfl->ro) {
@@ -536,8 +635,14 @@ static void pflash_write(PFlashCFI01 *pfl, hwaddr offset,
         case 0x40: /* Single Byte Program */
             trace_pflash_write(pfl->name, "single byte program (1)");
             if (!pfl->ro) {
-                pflash_data_write(pfl, offset, value, width, be);
-                pflash_update(pfl, offset, width);
+                if (pfl->program_ff_erases_sector && width == 1 &&
+                    value == 0xff && offset % pfl->sector_len == 0) {
+                    memset(pfl->storage + offset, 0xff, pfl->sector_len);
+                    pflash_update(pfl, offset, pfl->sector_len);
+                } else {
+                    pflash_data_write(pfl, offset, value, width, be);
+                    pflash_update(pfl, offset, width);
+                }
             } else {
                 pfl->status |= 0x10; /* Programming error */
             }
@@ -652,7 +757,7 @@ static void pflash_write(PFlashCFI01 *pfl, hwaddr offset,
 
  mode_read_array:
     trace_pflash_mode_read_array(pfl->name);
-    memory_region_rom_device_set_romd(&pfl->mem, true);
+    pflash_set_romd(pfl, true);
     pfl->wcycle = 0;
     pfl->cmd = 0x00; /* This model reset value for READ_ARRAY (not CFI) */
 }
@@ -825,6 +930,9 @@ static void pflash_cfi01_realize(DeviceState *dev, Error **errp)
     }
 
     pfl->storage = memory_region_get_ram_ptr(&pfl->mem);
+    if (pfl->io_mode_only) {
+        memory_region_rom_device_set_romd(&pfl->mem, false);
+    }
     sysbus_init_mmio(SYS_BUS_DEVICE(dev), &pfl->mem);
 
     if (pfl->blk) {
@@ -862,6 +970,14 @@ static void pflash_cfi01_realize(DeviceState *dev, Error **errp)
      */
     pfl->cmd = 0x00;
     pfl->status = 0x80; /* WSM ready */
+    if (pfl->defer_backing_write && pfl->blk) {
+        pfl->backing_sector_count =
+            DIV_ROUND_UP(total_len, BDRV_SECTOR_SIZE);
+        pfl->dirty_sector_map = bitmap_new(pfl->backing_sector_count);
+        pfl->next_deferred_flush = pfl->defer_backing_flush_interval;
+        timer_init_ms(&pfl->deferred_flush_timer, QEMU_CLOCK_REALTIME,
+                      pflash_deferred_flush_timer, pfl);
+    }
     pflash_cfi01_fill_cfi_table(pfl);
 
     pfl->blk_bytes = g_malloc(pfl->writeblock_size);
@@ -872,6 +988,7 @@ static void pflash_cfi01_system_reset(DeviceState *dev)
 {
     PFlashCFI01 *pfl = PFLASH_CFI01(dev);
 
+    pflash_flush_deferred(pfl);
     trace_pflash_reset(pfl->name);
     /*
      * The command 0x00 is not assigned by the CFI open standard,
@@ -879,7 +996,7 @@ static void pflash_cfi01_system_reset(DeviceState *dev)
      */
     pfl->cmd = 0x00;
     pfl->wcycle = 0;
-    memory_region_rom_device_set_romd(&pfl->mem, true);
+    pflash_set_romd(pfl, true);
     /*
      * The WSM ready timer occurs at most 150ns after system reset.
      * This model deliberately ignores this delay.
@@ -924,7 +1041,25 @@ static const Property pflash_cfi01_properties[] = {
     DEFINE_PROP_UINT16("id2", PFlashCFI01, ident2, 0),
     DEFINE_PROP_UINT16("id3", PFlashCFI01, ident3, 0),
     DEFINE_PROP_STRING("name", PFlashCFI01, name),
+    DEFINE_PROP_BOOL("program-ff-erases-sector", PFlashCFI01,
+                     program_ff_erases_sector, false),
+    DEFINE_PROP_BOOL("io-mode-only", PFlashCFI01, io_mode_only, false),
+    DEFINE_PROP_BOOL("defer-backing-write", PFlashCFI01,
+                     defer_backing_write, false),
+    DEFINE_PROP_UINT64("defer-backing-flush-interval", PFlashCFI01,
+                       defer_backing_flush_interval, 0),
+    DEFINE_PROP_UINT64("defer-backing-flush-delay-ms", PFlashCFI01,
+                       defer_backing_flush_delay_ms, 0),
 };
+
+static void pflash_cfi01_instance_finalize(Object *obj)
+{
+    PFlashCFI01 *pfl = PFLASH_CFI01(obj);
+
+    pflash_flush_deferred(pfl);
+    g_free(pfl->dirty_sector_map);
+    pfl->dirty_sector_map = NULL;
+}
 
 static void pflash_cfi01_class_init(ObjectClass *klass, const void *data)
 {
@@ -942,6 +1077,7 @@ static const TypeInfo pflash_cfi01_types[] = {
         .name           = TYPE_PFLASH_CFI01,
         .parent         = TYPE_SYS_BUS_DEVICE,
         .instance_size  = sizeof(PFlashCFI01),
+        .instance_finalize = pflash_cfi01_instance_finalize,
         .class_init     = pflash_cfi01_class_init,
     },
 };
@@ -1024,6 +1160,7 @@ static void postload_update_cb(void *opaque, bool running, RunState state)
 
     trace_pflash_postload_cb(pfl->name);
     pflash_update(pfl, 0, pfl->sector_len * pfl->nb_blocs);
+    pflash_flush_deferred(pfl);
 }
 
 static int pflash_post_load(void *opaque, int version_id)
