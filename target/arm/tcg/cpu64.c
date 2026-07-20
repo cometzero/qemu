@@ -1052,12 +1052,207 @@ static void aarch64_a710_initfn(Object *obj)
     aarch64_add_sve_properties(obj);
 }
 
+#define CORTEX_A720AE_DSU_PMU_NUM_COUNTERS 6
+#define CORTEX_A720AE_DSU_PMU_COUNTER_MASK \
+    ((1U << CORTEX_A720AE_DSU_PMU_NUM_COUNTERS) - 1)
+#define CORTEX_A720AE_DSU_PMU_VALID_MASK \
+    (CORTEX_A720AE_DSU_PMU_COUNTER_MASK | BIT(31))
+#define CORTEX_A720AE_DSU_PMU_CEID0 \
+    (BIT(0x11) | BIT(0x19) | BIT(0x1a) | BIT(0x1d))
+#define CORTEX_A720AE_DSU_PMU_CEID1 \
+    (BIT(0x29 - 32) | BIT(0x2a - 32) | BIT(0x2b - 32) | \
+     BIT(0x2c - 32))
+
+static CPUARMState *cortex_a720ae_dsu_pmu_state(CPUARMState *env)
+{
+    ARMCPU *cpu = env_archcpu(env);
+    CPUState *cs;
+    uint64_t cluster_affinity = cpu->mp_affinity &
+        ~(ARM_AFF0_MASK | ARM_AFF1_MASK);
+
+    CPU_FOREACH(cs) {
+        ARMCPU *candidate = ARM_CPU(cs);
+
+        if ((candidate->mp_affinity &
+             ~(ARM_AFF0_MASK | ARM_AFF1_MASK)) == cluster_affinity) {
+            return &candidate->env;
+        }
+    }
+
+    return env;
+}
+
+static uint64_t cortex_a720ae_dsu_pmu_pmcr_read(
+    CPUARMState *env, const ARMCPRegInfo *ri)
+{
+    env = cortex_a720ae_dsu_pmu_state(env);
+    return 0x40 | (CORTEX_A720AE_DSU_PMU_NUM_COUNTERS << 11) |
+           env->a720ae_dsu_pmu.pmcr;
+}
+
+static void cortex_a720ae_dsu_pmu_pmcr_write(
+    CPUARMState *env, const ARMCPRegInfo *ri, uint64_t value)
+{
+    env = cortex_a720ae_dsu_pmu_state(env);
+
+    if (value & BIT(1)) {
+        memset(env->a720ae_dsu_pmu.pmevcntr, 0,
+               sizeof(env->a720ae_dsu_pmu.pmevcntr));
+    }
+    if (value & BIT(2)) {
+        env->a720ae_dsu_pmu.pmccntr = 0;
+    }
+    env->a720ae_dsu_pmu.pmcr = value & BIT(0);
+}
+
+static uint64_t cortex_a720ae_dsu_pmu_pmcnten_read(
+    CPUARMState *env, const ARMCPRegInfo *ri)
+{
+    env = cortex_a720ae_dsu_pmu_state(env);
+    return env->a720ae_dsu_pmu.pmcnten;
+}
+
+static void cortex_a720ae_dsu_pmu_pmcntenset_write(
+    CPUARMState *env, const ARMCPRegInfo *ri, uint64_t value)
+{
+    env = cortex_a720ae_dsu_pmu_state(env);
+    env->a720ae_dsu_pmu.pmcnten |= value &
+        CORTEX_A720AE_DSU_PMU_VALID_MASK;
+}
+
+static void cortex_a720ae_dsu_pmu_pmcntenclr_write(
+    CPUARMState *env, const ARMCPRegInfo *ri, uint64_t value)
+{
+    env = cortex_a720ae_dsu_pmu_state(env);
+    env->a720ae_dsu_pmu.pmcnten &= ~(value &
+        CORTEX_A720AE_DSU_PMU_VALID_MASK);
+}
+
+static uint64_t cortex_a720ae_dsu_pmu_pmovs_read(
+    CPUARMState *env, const ARMCPRegInfo *ri)
+{
+    env = cortex_a720ae_dsu_pmu_state(env);
+    return env->a720ae_dsu_pmu.pmovsr;
+}
+
+static void cortex_a720ae_dsu_pmu_pmovsset_write(
+    CPUARMState *env, const ARMCPRegInfo *ri, uint64_t value)
+{
+    env = cortex_a720ae_dsu_pmu_state(env);
+    env->a720ae_dsu_pmu.pmovsr |= value &
+        CORTEX_A720AE_DSU_PMU_VALID_MASK;
+}
+
+static void cortex_a720ae_dsu_pmu_pmovsclr_write(
+    CPUARMState *env, const ARMCPRegInfo *ri, uint64_t value)
+{
+    env = cortex_a720ae_dsu_pmu_state(env);
+    env->a720ae_dsu_pmu.pmovsr &= ~(value &
+        CORTEX_A720AE_DSU_PMU_VALID_MASK);
+}
+
+static uint64_t cortex_a720ae_dsu_pmu_pmselr_read(
+    CPUARMState *env, const ARMCPRegInfo *ri)
+{
+    env = cortex_a720ae_dsu_pmu_state(env);
+    return env->a720ae_dsu_pmu.pmselr;
+}
+
+static void cortex_a720ae_dsu_pmu_pmselr_write(
+    CPUARMState *env, const ARMCPRegInfo *ri, uint64_t value)
+{
+    env = cortex_a720ae_dsu_pmu_state(env);
+    env->a720ae_dsu_pmu.pmselr = value & 0x1f;
+}
+
+static uint64_t cortex_a720ae_dsu_pmu_pminten_read(
+    CPUARMState *env, const ARMCPRegInfo *ri)
+{
+    env = cortex_a720ae_dsu_pmu_state(env);
+    return env->a720ae_dsu_pmu.pminten;
+}
+
+static void cortex_a720ae_dsu_pmu_pmintenset_write(
+    CPUARMState *env, const ARMCPRegInfo *ri, uint64_t value)
+{
+    env = cortex_a720ae_dsu_pmu_state(env);
+    env->a720ae_dsu_pmu.pminten |= value &
+        CORTEX_A720AE_DSU_PMU_VALID_MASK;
+}
+
+static void cortex_a720ae_dsu_pmu_pmintenclr_write(
+    CPUARMState *env, const ARMCPRegInfo *ri, uint64_t value)
+{
+    env = cortex_a720ae_dsu_pmu_state(env);
+    env->a720ae_dsu_pmu.pminten &= ~(value &
+        CORTEX_A720AE_DSU_PMU_VALID_MASK);
+}
+
+static uint64_t cortex_a720ae_dsu_pmu_pmccntr_read(
+    CPUARMState *env, const ARMCPRegInfo *ri)
+{
+    env = cortex_a720ae_dsu_pmu_state(env);
+    return env->a720ae_dsu_pmu.pmccntr;
+}
+
+static void cortex_a720ae_dsu_pmu_pmccntr_write(
+    CPUARMState *env, const ARMCPRegInfo *ri, uint64_t value)
+{
+    env = cortex_a720ae_dsu_pmu_state(env);
+    env->a720ae_dsu_pmu.pmccntr = value;
+}
+
+static uint64_t cortex_a720ae_dsu_pmu_pmxevtyper_read(
+    CPUARMState *env, const ARMCPRegInfo *ri)
+{
+    uint32_t selector;
+
+    env = cortex_a720ae_dsu_pmu_state(env);
+    selector = env->a720ae_dsu_pmu.pmselr;
+    if (selector >= CORTEX_A720AE_DSU_PMU_NUM_COUNTERS) {
+        return 0;
+    }
+    return env->a720ae_dsu_pmu.pmevtyper[selector];
+}
+
+static void cortex_a720ae_dsu_pmu_pmxevtyper_write(
+    CPUARMState *env, const ARMCPRegInfo *ri, uint64_t value)
+{
+    uint32_t selector;
+
+    env = cortex_a720ae_dsu_pmu_state(env);
+    selector = env->a720ae_dsu_pmu.pmselr;
+    if (selector < CORTEX_A720AE_DSU_PMU_NUM_COUNTERS) {
+        env->a720ae_dsu_pmu.pmevtyper[selector] = value;
+    }
+}
+
+static uint64_t cortex_a720ae_dsu_pmu_pmxevcntr_read(
+    CPUARMState *env, const ARMCPRegInfo *ri)
+{
+    uint32_t selector;
+
+    env = cortex_a720ae_dsu_pmu_state(env);
+    selector = env->a720ae_dsu_pmu.pmselr;
+    if (selector >= CORTEX_A720AE_DSU_PMU_NUM_COUNTERS) {
+        return 0;
+    }
+    return env->a720ae_dsu_pmu.pmevcntr[selector];
+}
+
+static void cortex_a720ae_dsu_pmu_pmxevcntr_write(
+    CPUARMState *env, const ARMCPRegInfo *ri, uint64_t value)
+{
+    uint32_t selector;
+
+    env = cortex_a720ae_dsu_pmu_state(env);
+    selector = env->a720ae_dsu_pmu.pmselr;
+    if (selector < CORTEX_A720AE_DSU_PMU_NUM_COUNTERS) {
+        env->a720ae_dsu_pmu.pmevcntr[selector] = value;
+    }
+}
+
 static const ARMCPRegInfo cortex_a720ae_dsu_pmu_cp_reginfo[] = {
-    /*
-     * RD-Aspen exposes the DSU PMU in DT. QEMU does not model the DSU, so
-     * provide a no-counter DSU PMU register bank to let Linux bind the driver
-     * without taking undefined sysreg traps.
-     */
     { .name = "CLUSTERPWRCTLR_EL1", .state = ARM_CP_STATE_AA64,
       .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 3, .opc2 = 5,
       .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0x70 },
@@ -1069,46 +1264,70 @@ static const ARMCPRegInfo cortex_a720ae_dsu_pmu_cp_reginfo[] = {
       .access = PL3_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
     { .name = "CLUSTERPMCR_EL1", .state = ARM_CP_STATE_AA64,
       .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 5, .opc2 = 0,
-      .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0x40 },
+      .access = PL1_RW, .type = ARM_CP_IO | ARM_CP_NO_RAW,
+      .readfn = cortex_a720ae_dsu_pmu_pmcr_read,
+      .writefn = cortex_a720ae_dsu_pmu_pmcr_write },
     { .name = "CLUSTERPMCNTENSET_EL1", .state = ARM_CP_STATE_AA64,
       .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 5, .opc2 = 1,
-      .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
+      .access = PL1_RW, .type = ARM_CP_IO | ARM_CP_NO_RAW,
+      .readfn = cortex_a720ae_dsu_pmu_pmcnten_read,
+      .writefn = cortex_a720ae_dsu_pmu_pmcntenset_write },
     { .name = "CLUSTERPMCNTENCLR_EL1", .state = ARM_CP_STATE_AA64,
       .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 5, .opc2 = 2,
-      .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
+      .access = PL1_RW, .type = ARM_CP_IO | ARM_CP_NO_RAW,
+      .readfn = cortex_a720ae_dsu_pmu_pmcnten_read,
+      .writefn = cortex_a720ae_dsu_pmu_pmcntenclr_write },
     { .name = "CLUSTERPMOVSSET_EL1", .state = ARM_CP_STATE_AA64,
       .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 5, .opc2 = 3,
-      .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
+      .access = PL1_RW, .type = ARM_CP_IO | ARM_CP_NO_RAW,
+      .readfn = cortex_a720ae_dsu_pmu_pmovs_read,
+      .writefn = cortex_a720ae_dsu_pmu_pmovsset_write },
     { .name = "CLUSTERPMOVSCLR_EL1", .state = ARM_CP_STATE_AA64,
       .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 5, .opc2 = 4,
-      .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
+      .access = PL1_RW, .type = ARM_CP_IO | ARM_CP_NO_RAW,
+      .readfn = cortex_a720ae_dsu_pmu_pmovs_read,
+      .writefn = cortex_a720ae_dsu_pmu_pmovsclr_write },
     { .name = "CLUSTERPMSELR_EL1", .state = ARM_CP_STATE_AA64,
       .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 5, .opc2 = 5,
-      .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
+      .access = PL1_RW, .type = ARM_CP_IO | ARM_CP_NO_RAW,
+      .readfn = cortex_a720ae_dsu_pmu_pmselr_read,
+      .writefn = cortex_a720ae_dsu_pmu_pmselr_write },
     { .name = "CLUSTERPMINTENSET_EL1", .state = ARM_CP_STATE_AA64,
       .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 5, .opc2 = 6,
-      .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
+      .access = PL1_RW, .type = ARM_CP_IO | ARM_CP_NO_RAW,
+      .readfn = cortex_a720ae_dsu_pmu_pminten_read,
+      .writefn = cortex_a720ae_dsu_pmu_pmintenset_write },
     { .name = "CLUSTERPMINTENCLR_EL1", .state = ARM_CP_STATE_AA64,
       .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 5, .opc2 = 7,
-      .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
+      .access = PL1_RW, .type = ARM_CP_IO | ARM_CP_NO_RAW,
+      .readfn = cortex_a720ae_dsu_pmu_pminten_read,
+      .writefn = cortex_a720ae_dsu_pmu_pmintenclr_write },
     { .name = "CLUSTERPMCCNTR_EL1", .state = ARM_CP_STATE_AA64,
       .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 6, .opc2 = 0,
-      .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
+      .access = PL1_RW, .type = ARM_CP_IO | ARM_CP_NO_RAW,
+      .readfn = cortex_a720ae_dsu_pmu_pmccntr_read,
+      .writefn = cortex_a720ae_dsu_pmu_pmccntr_write },
     { .name = "CLUSTERPMXEVTYPER_EL1", .state = ARM_CP_STATE_AA64,
       .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 6, .opc2 = 1,
-      .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
+      .access = PL1_RW, .type = ARM_CP_IO | ARM_CP_NO_RAW,
+      .readfn = cortex_a720ae_dsu_pmu_pmxevtyper_read,
+      .writefn = cortex_a720ae_dsu_pmu_pmxevtyper_write },
     { .name = "CLUSTERPMXEVCNTR_EL1", .state = ARM_CP_STATE_AA64,
       .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 6, .opc2 = 2,
-      .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
+      .access = PL1_RW, .type = ARM_CP_IO | ARM_CP_NO_RAW,
+      .readfn = cortex_a720ae_dsu_pmu_pmxevcntr_read,
+      .writefn = cortex_a720ae_dsu_pmu_pmxevcntr_write },
     { .name = "CLUSTERPMMDCR_EL1", .state = ARM_CP_STATE_AA64,
       .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 6, .opc2 = 3,
       .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
     { .name = "CLUSTERPMCEID0_EL1", .state = ARM_CP_STATE_AA64,
       .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 6, .opc2 = 4,
-      .access = PL1_R, .type = ARM_CP_CONST, .resetvalue = 0 },
+      .access = PL1_R, .type = ARM_CP_CONST,
+      .resetvalue = CORTEX_A720AE_DSU_PMU_CEID0 },
     { .name = "CLUSTERPMCEID1_EL1", .state = ARM_CP_STATE_AA64,
       .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 6, .opc2 = 5,
-      .access = PL1_R, .type = ARM_CP_CONST, .resetvalue = 0 },
+      .access = PL1_R, .type = ARM_CP_CONST,
+      .resetvalue = CORTEX_A720AE_DSU_PMU_CEID1 },
 };
 
 static void aarch64_a720ae_initfn(Object *obj)

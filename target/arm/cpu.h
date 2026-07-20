@@ -776,6 +776,17 @@ typedef struct CPUArchState {
      */
     bool event_register;
 
+    struct {
+        uint32_t pmcr;
+        uint32_t pmcnten;
+        uint32_t pmovsr;
+        uint32_t pmselr;
+        uint32_t pminten;
+        uint32_t pmevtyper[6];
+        uint32_t pmevcntr[6];
+        uint64_t pmccntr;
+    } a720ae_dsu_pmu;
+
     /* Fields up to this point are cleared by a CPU reset */
     struct {} end_reset_fields;
 
