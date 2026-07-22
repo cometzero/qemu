@@ -227,6 +227,14 @@ foreach(target ${LIBQEMU_TARGETS})
     endif()
 endforeach()
 
+# Preserve the parent GNU Make jobserver for QEMU's recursive build and
+# install steps.  Other generators should invoke their build tool directly.
+if(CMAKE_GENERATOR MATCHES "Make")
+    set(_qemu_build_command "$(MAKE)")
+else()
+    set(_qemu_build_command ${CMAKE_MAKE_PROGRAM})
+endif()
+
 ExternalProject_Add(qemu
     SOURCE_DIR ${LIBQEMU_QEMU_SOURCE_DIR}
     CONFIGURE_COMMAND ${CONFIGURE_ENVIRONMENT_VARIABLE} ${LIBQEMU_QEMU_SOURCE_DIR}/configure
@@ -236,8 +244,8 @@ ExternalProject_Add(qemu
         --prefix=<INSTALL_DIR>
         --target-list=${target_list}
         ${QEMU_CONF_ARGS}
-    BUILD_COMMAND ${CMAKE_MAKE_PROGRAM}
-    INSTALL_COMMAND ${CMAKE_MAKE_PROGRAM} install
+    BUILD_COMMAND ${_qemu_build_command}
+    INSTALL_COMMAND ${_qemu_build_command} install
     BUILD_ALWAYS ${LIBQEMU_BUILD_ALWAYS}
 )
 
