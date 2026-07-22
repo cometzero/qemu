@@ -640,7 +640,9 @@ child_realize_fail:
     }
 #endif /* CONFIG_LIBQEMU */
 
+#ifndef CONFIG_LIBQEMU
 post_realize_fail:
+#endif
     g_free(dev->canonical_path);
     dev->canonical_path = NULL;
     if (dc->unrealize) {
