@@ -29,6 +29,16 @@
 #include "qom/object.h"
 #include "hw/timer/sse-counter.h"
 
+typedef struct ArmSSETimerSnapshot {
+    int64_t qemu_virtual_ns;
+    uint64_t count;
+    uint64_t cval;
+    uint64_t counter_frequency_hz;
+    uint32_t cntfrq;
+    uint32_t ctl;
+    uint32_t irq_level;
+} ArmSSETimerSnapshot;
+
 #define TYPE_SSE_TIMER "sse-timer"
 OBJECT_DECLARE_SIMPLE_TYPE(SSETimer, SSE_TIMER)
 
@@ -42,6 +52,8 @@ struct SSETimer {
     SSECounter *counter;
     QEMUTimer timer;
     Notifier counter_notifier;
+    bool counter_notifier_registered;
+    bool irq_level;
 
     uint32_t cntfrq;
     uint32_t cntp_ctl;
@@ -50,5 +62,8 @@ struct SSETimer {
     uint32_t cntp_aival_ctl;
     uint32_t cntp_aival_reload;
 };
+
+bool sse_timer_get_snapshot(SSECounter *counter, SSETimer *timer,
+                            ArmSSETimerSnapshot *snapshot);
 
 #endif

@@ -32,8 +32,201 @@
 #include "system/reset.h"
 #include "target/arm/arm-powerctl.h"
 #include "target/arm/multiprocessing.h"
+#include "hw/core/irq.h"
+#include "hw/timer/arm_generic_timer_counter.h"
+#include "hw/timer/arm_arch_timer_mmio.h"
+#include "hw/timer/sse-counter.h"
+#include "hw/timer/sse-timer.h"
+#include "target/arm/gtimer.h"
+#include "target/arm/internals.h"
 
 #include "arm.h"
+
+QEMU_BUILD_BUG_ON((int)LIBQEMU_ARM_GENERIC_TIMER_PHYS != GTIMER_PHYS);
+QEMU_BUILD_BUG_ON((int)LIBQEMU_ARM_GENERIC_TIMER_VIRT != GTIMER_VIRT);
+QEMU_BUILD_BUG_ON((int)LIBQEMU_ARM_GENERIC_TIMER_HYP != GTIMER_HYP);
+QEMU_BUILD_BUG_ON((int)LIBQEMU_ARM_GENERIC_TIMER_SEC != GTIMER_SEC);
+QEMU_BUILD_BUG_ON((int)LIBQEMU_ARM_GENERIC_TIMER_HYPVIRT != GTIMER_HYPVIRT);
+QEMU_BUILD_BUG_ON((int)LIBQEMU_ARM_GENERIC_TIMER_S_EL2_PHYS !=
+                  GTIMER_S_EL2_PHYS);
+QEMU_BUILD_BUG_ON((int)LIBQEMU_ARM_GENERIC_TIMER_S_EL2_VIRT !=
+                  GTIMER_S_EL2_VIRT);
+QEMU_BUILD_BUG_ON((int)LIBQEMU_ARM_GENERIC_TIMER_OUTPUT_COUNT != NUM_GTIMERS);
+
+typedef struct LibQemuArmCounterProxyContext {
+    LibQemuArmGenericTimerCounterCallbacks callbacks;
+    void *opaque;
+} LibQemuArmCounterProxyContext;
+
+static uint64_t libqemu_arm_counter_count_at_ns(void *opaque, int64_t now_ns)
+{
+    LibQemuArmCounterProxyContext *context = opaque;
+
+    return context->callbacks.count_at_ns(context->opaque, now_ns);
+}
+
+static bool libqemu_arm_counter_deadline_ns(void *opaque,
+                                           uint64_t target_count,
+                                           int64_t from_ns,
+                                           int64_t *deadline_ns)
+{
+    LibQemuArmCounterProxyContext *context = opaque;
+
+    return context->callbacks.deadline_ns(context->opaque, target_count,
+                                          from_ns, deadline_ns);
+}
+
+static bool libqemu_arm_counter_snapshot(
+    void *opaque, int64_t now_ns, ArmGenericTimerCounterSnapshot *snapshot)
+{
+    LibQemuArmCounterProxyContext *context = opaque;
+    LibQemuArmGenericTimerCounterSnapshot public = {
+        .size = sizeof(public),
+        .version = LIBQEMU_ARM_GENERIC_TIMER_COUNTER_SNAPSHOT_ABI,
+    };
+
+    if (!context->callbacks.snapshot(context->opaque, now_ns, &public)) {
+        return false;
+    }
+    snapshot->qemu_virtual_ns = public.qemu_virtual_ns;
+    snapshot->count = public.count;
+    snapshot->nominal_frequency_hz = public.nominal_frequency_hz;
+    snapshot->reported_frequency_hz = public.reported_frequency_hz;
+    snapshot->enabled = public.enabled;
+    snapshot->halted = public.halted;
+    return true;
+}
+
+static void libqemu_arm_counter_context_free(void *opaque)
+{
+    g_free(opaque);
+}
+
+Object *libqemu_arm_generic_timer_counter_proxy_new(
+    const LibQemuArmGenericTimerCounterCallbacks *callbacks, void *opaque)
+{
+    LibQemuArmCounterProxyContext *context;
+    ArmGenericTimerCounterCallbacks internal = {
+        .count_at_ns = libqemu_arm_counter_count_at_ns,
+        .deadline_ns = libqemu_arm_counter_deadline_ns,
+        .snapshot = libqemu_arm_counter_snapshot,
+        .free_opaque = libqemu_arm_counter_context_free,
+    };
+
+    if (!callbacks || callbacks->size != sizeof(*callbacks) ||
+        callbacks->version != LIBQEMU_ARM_GENERIC_TIMER_COUNTER_ABI ||
+        !callbacks->count_at_ns || !callbacks->deadline_ns ||
+        !callbacks->snapshot) {
+        return NULL;
+    }
+
+    context = g_new(LibQemuArmCounterProxyContext, 1);
+    context->callbacks = *callbacks;
+    context->opaque = opaque;
+    return arm_generic_timer_counter_proxy_new(&internal, context);
+}
+
+void libqemu_arm_generic_timer_counter_proxy_clear(Object *obj)
+{
+    arm_generic_timer_counter_proxy_clear(obj);
+}
+
+void libqemu_arm_generic_timer_counter_notify(Object *obj)
+{
+    arm_generic_timer_counter_notify(obj);
+}
+
+void libqemu_cpu_arm_connect_generic_timer_output(
+    Object *obj, LibQemuArmGenericTimerOutput output, struct IRQState *sink)
+{
+    g_return_if_fail(output >= 0 && output < NUM_GTIMERS);
+    qdev_connect_gpio_out(DEVICE(obj), output, sink);
+}
+
+bool libqemu_cpu_arm_generic_timer_snapshot(
+    Object *obj, LibQemuArmGenericTimerOutput output,
+    LibQemuArmCpuGenericTimerSnapshot *snapshot)
+{
+    ARMCPU *cpu;
+    ARMGenericTimer *timer;
+    int64_t now_ns;
+
+    if (!snapshot || snapshot->size != sizeof(*snapshot) ||
+        snapshot->version != LIBQEMU_ARM_TIMER_SNAPSHOT_ABI ||
+        output < 0 || output >= NUM_GTIMERS ||
+        !object_dynamic_cast(obj, TYPE_ARM_CPU)) {
+        return false;
+    }
+
+    cpu = ARM_CPU(obj);
+    arm_gt_recalc_timer(cpu, output);
+    timer = &cpu->env.cp15.c14_timer[output];
+    now_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    snapshot->qemu_virtual_ns = now_ns;
+    if (cpu->counter_provider) {
+        snapshot->physical_count = arm_generic_timer_counter_count_at_ns(
+            cpu->counter_provider, now_ns);
+    } else {
+        snapshot->physical_count = now_ns / gt_cntfrq_period_ns(cpu);
+    }
+    snapshot->cval = timer->cval;
+    snapshot->cntfrq = cpu->gt_cntfrq_hz;
+    snapshot->ctl = timer->ctl;
+    snapshot->irq_level = cpu->gt_timer_output_level[output];
+    return true;
+}
+
+bool libqemu_arm_arch_timer_mmio_frame_snapshot(
+    Object *obj, uint32_t frame,
+    LibQemuArmArchTimerMMIOFrameSnapshot *snapshot)
+{
+    ArmArchTimerMMIOFrameSnapshot internal;
+
+    if (!snapshot || snapshot->size != sizeof(*snapshot) ||
+        snapshot->version != LIBQEMU_ARM_TIMER_SNAPSHOT_ABI ||
+        !object_dynamic_cast(obj, TYPE_ARM_ARCH_TIMER_MMIO) ||
+        !arm_arch_timer_mmio_get_frame_snapshot(ARM_ARCH_TIMER_MMIO(obj),
+                                                frame, &internal)) {
+        return false;
+    }
+    snapshot->qemu_virtual_ns = internal.qemu_virtual_ns;
+    snapshot->count = internal.count;
+    snapshot->cval = internal.cval;
+    snapshot->cntfrq = internal.cntfrq;
+    snapshot->cntacr = internal.cntacr;
+    snapshot->cntpl0acr = internal.cntpl0acr;
+    snapshot->cntnsar = internal.cntnsar;
+    snapshot->cntnsar_implemented = internal.cntnsar_implemented;
+    snapshot->ctl = internal.ctl;
+    snapshot->irq_level = internal.irq_level;
+    snapshot->count_accessible = internal.count_accessible;
+    snapshot->frequency_accessible = internal.frequency_accessible;
+    snapshot->timer_accessible = internal.timer_accessible;
+    return true;
+}
+
+bool libqemu_arm_sse_timer_snapshot(
+    Object *counter, Object *timer, LibQemuArmSSETimerSnapshot *snapshot)
+{
+    ArmSSETimerSnapshot internal;
+
+    if (!snapshot || snapshot->size != sizeof(*snapshot) ||
+        snapshot->version != LIBQEMU_ARM_TIMER_SNAPSHOT_ABI ||
+        !object_dynamic_cast(counter, TYPE_SSE_COUNTER) ||
+        !object_dynamic_cast(timer, TYPE_SSE_TIMER) ||
+        !sse_timer_get_snapshot(SSE_COUNTER(counter), SSE_TIMER(timer),
+                                &internal)) {
+        return false;
+    }
+    snapshot->qemu_virtual_ns = internal.qemu_virtual_ns;
+    snapshot->count = internal.count;
+    snapshot->cval = internal.cval;
+    snapshot->counter_frequency_hz = internal.counter_frequency_hz;
+    snapshot->cntfrq = internal.cntfrq;
+    snapshot->ctl = internal.ctl;
+    snapshot->irq_level = internal.irq_level;
+    return true;
+}
 
 void libqemu_cpu_arm_set_cp15_cbar(Object *obj, uint64_t cbar)
 {

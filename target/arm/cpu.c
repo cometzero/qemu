@@ -36,6 +36,8 @@
 #include "cpu-features.h"
 #include "exec/target_page.h"
 #include "hw/core/qdev-properties.h"
+#include "hw/timer/arm_generic_timer_counter.h"
+#include "migration/blocker.h"
 #if !defined(CONFIG_USER_ONLY)
 #include "hw/core/loader.h"
 #include "hw/core/boards.h"
@@ -784,6 +786,7 @@ bool arm_cpu_exec_halt(CPUState *cs)
         ARMCPU *cpu = ARM_CPU(cs);
         if (cpu->wfxt_timer) {
             timer_del(cpu->wfxt_timer);
+            cpu->wfxt_deadline_active = false;
         }
     }
     return leave_halt;
@@ -794,6 +797,8 @@ static void arm_wfxt_timer_cb(void *opaque)
 {
     ARMCPU *cpu = opaque;
     CPUState *cs = CPU(cpu);
+
+    cpu->wfxt_deadline_active = false;
 
     /*
      * We expect the CPU to be halted; this will cause arm_cpu_is_work()
@@ -1141,6 +1146,12 @@ static void arm_cpu_initfn(Object *obj)
 
     qdev_init_gpio_out(DEVICE(cpu), cpu->gt_timer_outputs,
                        ARRAY_SIZE(cpu->gt_timer_outputs));
+
+    object_property_add_link(obj, "counter-provider",
+                             TYPE_ARM_GENERIC_TIMER_COUNTER,
+                             (Object **)&cpu->counter_provider,
+                             qdev_prop_allow_set_link_before_realize,
+                             OBJ_PROP_LINK_STRONG);
 
     qdev_init_gpio_out_named(DEVICE(cpu), &cpu->gicv3_maintenance_interrupt,
                              "gicv3-maintenance-interrupt", 1);
@@ -1580,6 +1591,14 @@ static void arm_cpu_finalizefn(Object *obj)
         g_free(hook);
     }
 #ifndef CONFIG_USER_ONLY
+    if (cpu->counter_notifier_registered) {
+        arm_generic_timer_counter_unregister_consumer(cpu->counter_provider,
+                                                       &cpu->counter_notifier);
+        cpu->counter_notifier_registered = false;
+    }
+    if (cpu->counter_migration_blocker) {
+        migrate_del_blocker(&cpu->counter_migration_blocker);
+    }
     if (cpu->pmu_timer) {
         timer_free(cpu->pmu_timer);
     }
@@ -1592,6 +1611,19 @@ static void arm_cpu_finalizefn(Object *obj)
 void arm_cpu_finalize_features(ARMCPU *cpu, Error **errp)
 {
     Error *local_err = NULL;
+
+    if (cpu->counter_provider && !tcg_enabled()) {
+        error_setg(errp, "counter-provider requires TCG");
+        return;
+    }
+    if (cpu->counter_provider) {
+        error_setg(&cpu->counter_migration_blocker,
+                   "ARM CPU with an external counter provider does not "
+                   "support migration");
+        if (migrate_add_blocker(&cpu->counter_migration_blocker, errp) < 0) {
+            return;
+        }
+    }
 
     if (arm_feature(&cpu->env, ARM_FEATURE_AARCH64)) {
         arm_cpu_sve_finalize(cpu, &local_err);
@@ -1735,6 +1767,16 @@ static void arm_cpu_realizefn(DeviceState *dev, Error **errp)
         }
     }
 #ifndef CONFIG_USER_ONLY
+    if (cpu->counter_provider) {
+        ArmGenericTimerCounterSnapshot counter_snapshot;
+
+        if (!arm_generic_timer_counter_snapshot(
+                cpu->counter_provider,
+                qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL), &counter_snapshot)) {
+            error_setg(errp, "counter-provider snapshot unavailable");
+            return;
+        }
+    }
     {
         uint64_t scale = gt_cntfrq_period_ns(cpu);
 
@@ -1752,6 +1794,12 @@ static void arm_cpu_realizefn(DeviceState *dev, Error **errp)
                                                      arm_gt_sel2timer_cb, cpu);
         cpu->gt_timer[GTIMER_S_EL2_VIRT] = timer_new(QEMU_CLOCK_VIRTUAL, scale,
                                                      arm_gt_sel2vtimer_cb, cpu);
+        if (cpu->counter_provider) {
+            cpu->counter_notifier.notify = arm_gt_counter_provider_changed;
+            arm_generic_timer_counter_register_consumer(
+                cpu->counter_provider, &cpu->counter_notifier);
+            cpu->counter_notifier_registered = true;
+        }
     }
 #endif
 

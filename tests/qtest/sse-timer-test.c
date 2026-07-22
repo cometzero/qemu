@@ -220,6 +220,52 @@ static void test_timer_scale_change(void)
     g_assert_cmpuint(readl(TIMER_BASE + CNTP_CTL), ==, 5);
 }
 
+static void test_counter_device_reset_rearms_timer(void)
+{
+    int64_t before_reset, after_reset, deadline;
+
+    reset_counter_and_timer();
+    writel(PERIPHNSPPC0, 1);
+    writel(COUNTER_BASE + CNTCR, 1);
+    writel(TIMER_BASE + CNTP_CTL, 1);
+    writel(TIMER_BASE + CNTP_CVAL_LO, 4000);
+    writel(TIMER_BASE + CNTP_CVAL_HI, 0);
+    clock_step_ticks(2000);
+
+    before_reset = qtest_clock_get(global_qtest);
+    qtest_device_reset(global_qtest, "/machine/iotkit/sse-counter");
+    writel(COUNTER_BASE + CNTCR, 1);
+    after_reset = qtest_clock_get(global_qtest);
+    g_assert_cmpint(after_reset, ==, before_reset);
+
+    deadline = qtest_clock_step_next(global_qtest);
+    g_assert_cmpint(deadline - after_reset, ==, 125000);
+    g_assert_cmpuint(readl(TIMER_BASE + CNTP_CTL), ==, 5);
+}
+
+static void test_timer_device_reset_deasserts_irq(void)
+{
+    reset_counter_and_timer();
+    writel(PERIPHNSPPC0, 1);
+    qtest_irq_intercept_out_named(global_qtest, "/machine/iotkit/timer0",
+                                  "sysbus-irq");
+    writel(COUNTER_BASE + CNTCR, 1);
+    writel(TIMER_BASE + CNTP_CVAL_LO, 4);
+    writel(TIMER_BASE + CNTP_CVAL_HI, 0);
+    writel(TIMER_BASE + CNTP_CTL, 1);
+    clock_step_ticks(4);
+    g_assert_true(qtest_get_irq(global_qtest, 0));
+    g_assert_cmpuint(readl(TIMER_BASE + CNTP_CTL), ==, 5);
+
+    qtest_device_reset(global_qtest, "/machine/iotkit/timer0");
+    g_assert_false(qtest_get_irq(global_qtest, 0));
+    g_assert_cmpuint(readl(TIMER_BASE + CNTP_CTL), ==, 0);
+    g_assert_cmpuint(readl(TIMER_BASE + CNTP_CVAL_LO), ==, 0);
+    g_assert_cmpuint(readl(TIMER_BASE + CNTP_CVAL_HI), ==, 0);
+    clock_step_ticks(4);
+    g_assert_false(qtest_get_irq(global_qtest, 0));
+}
+
 int main(int argc, char **argv)
 {
     int r;
@@ -231,6 +277,10 @@ int main(int argc, char **argv)
     qtest_add_func("/sse-timer/counter", test_counter);
     qtest_add_func("/sse-timer/timer", test_timer);
     qtest_add_func("/sse-timer/timer-scale-change", test_timer_scale_change);
+    qtest_add_func("/sse-timer/counter-device-reset-rearms-timer",
+                   test_counter_device_reset_rearms_timer);
+    qtest_add_func("/sse-timer/timer-device-reset-deasserts-irq",
+                   test_timer_device_reset_deasserts_irq);
 
     r = g_test_run();
 

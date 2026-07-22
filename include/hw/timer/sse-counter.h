@@ -101,5 +101,6 @@ uint64_t sse_counter_tick_to_time(SSECounter *counter, uint64_t tick);
  * a cue to recalculate timer events.
  */
 void sse_counter_register_consumer(SSECounter *counter, Notifier *notifier);
+void sse_counter_unregister_consumer(SSECounter *counter, Notifier *notifier);
 
 #endif

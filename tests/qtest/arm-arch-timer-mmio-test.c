@@ -10,11 +10,21 @@
 #define FRAME1_BASE             (TIMER_BASE + 0x20000)
 #define TEST_CNTFRQ             ((uint64_t)100000000)
 #define NS_PER_10_TICKS         100ULL
+#define TEST_PROVIDER_PATH      "/machine/peripheral/counter"
 
 typedef struct TimerQTest {
     QTestState *qts;
     char *dtb_path;
 } TimerQTest;
+
+static void timer_enable_frame_access(QTestState *qts)
+{
+    qtest_writel(qts, TIMER_BASE + ARM_ARCH_TIMER_MMIO_CNTCTL_CNTNSAR, 3);
+    qtest_writel(qts, TIMER_BASE + ARM_ARCH_TIMER_MMIO_CNTCTL_CNTACR_BASE,
+                 0x3f);
+    qtest_writel(qts, TIMER_BASE + ARM_ARCH_TIMER_MMIO_CNTCTL_CNTACR_BASE + 4,
+                 0x3f);
+}
 
 static const uint8_t minimal_virt_dtb[] = {
     0xd0, 0x0d, 0xfe, 0xed, 0x00, 0x00, 0x00, 0xbe,
@@ -73,7 +83,7 @@ static void timer_qtest_write_dtb(char **path)
     close(fd);
 }
 
-static TimerQTest timer_qtest_start(const char *extra)
+static TimerQTest timer_qtest_start_raw(const char *extra)
 {
     TimerQTest t;
 
@@ -90,6 +100,48 @@ static TimerQTest timer_qtest_start(const char *extra)
                         "%s",
                         t.dtb_path, TEST_CNTFRQ, extra ? extra : "");
     return t;
+}
+
+static TimerQTest timer_qtest_start(const char *extra)
+{
+    TimerQTest t = timer_qtest_start_raw(extra);
+
+    timer_enable_frame_access(t.qts);
+    return t;
+}
+
+static TimerQTest timer_qtest_start_external(void)
+{
+    TimerQTest t;
+
+    timer_qtest_write_dtb(&t.dtb_path);
+    t.qts = qtest_initf("-nodefaults "
+                        "-machine virt "
+                        "-dtb %s "
+                        "-device arm-generic-timer-counter-test"
+                        ",id=counter"
+                        ",visible-frequency=%" PRIu64
+                        ",count=1000 "
+                        "-device " TYPE_ARM_ARCH_TIMER_MMIO
+                        ",id=archtimer"
+                        ",cntfrq=%" PRIu64
+                        ",nr-frames=2"
+                        ",frame-offset-0=0x10000"
+                        ",frame-offset-1=0x20000"
+                        ",counter-provider=" TEST_PROVIDER_PATH,
+                        t.dtb_path, TEST_CNTFRQ, TEST_CNTFRQ);
+    timer_enable_frame_access(t.qts);
+    return t;
+}
+
+static void timer_qom_set_uint(QTestState *qts, const char *property,
+                               uint64_t value)
+{
+    qtest_qmp_assert_success(qts,
+                            "{'execute': 'qom-set', 'arguments': {"
+                            "'path': '" TEST_PROVIDER_PATH "', "
+                            "'property': %s, 'value': %" PRIu64 "}}",
+                            property, value);
 }
 
 static void timer_qtest_stop(TimerQTest *t)
@@ -232,6 +284,232 @@ static void test_64bit_cval_access(void)
     timer_qtest_stop(&t);
 }
 
+static void test_external_counter_deadline_notify(void)
+{
+    TimerQTest t = timer_qtest_start_external();
+    QTestState *qts = t.qts;
+    uint64_t frame0_count, frame1_count;
+    uint32_t ctl0, ctl1;
+
+    qtest_irq_intercept_out_named(qts, "/machine/peripheral/archtimer",
+                                  "sysbus-irq");
+
+    frame0_count = timer_read64(qts, FRAME0_BASE,
+                                ARM_ARCH_TIMER_MMIO_CNTBASE_CNTPCT_LO);
+    frame1_count = timer_read64(qts, FRAME1_BASE,
+                                ARM_ARCH_TIMER_MMIO_CNTBASE_CNTPCT_LO);
+    g_assert_cmpuint(frame0_count, ==, 1000);
+    g_assert_cmpuint(frame1_count, ==, frame0_count);
+
+    timer_write64(qts, FRAME0_BASE,
+                  ARM_ARCH_TIMER_MMIO_CNTBASE_CNTP_CVAL_LO, 1010);
+    timer_write64(qts, FRAME1_BASE,
+                  ARM_ARCH_TIMER_MMIO_CNTBASE_CNTP_CVAL_LO, 1020);
+    qtest_writel(qts, FRAME0_BASE + ARM_ARCH_TIMER_MMIO_CNTBASE_CNTP_CTL,
+                 ARM_ARCH_TIMER_MMIO_CNTP_CTL_ENABLE);
+    qtest_writel(qts, FRAME1_BASE + ARM_ARCH_TIMER_MMIO_CNTBASE_CNTP_CTL,
+                 ARM_ARCH_TIMER_MMIO_CNTP_CTL_ENABLE);
+
+    qtest_clock_step(qts, NS_PER_10_TICKS - 1);
+    g_assert_false(qtest_get_irq(qts, 0));
+    g_assert_false(qtest_get_irq(qts, 1));
+    qtest_clock_step(qts, 1);
+    g_assert_true(qtest_get_irq(qts, 0));
+    g_assert_false(qtest_get_irq(qts, 1));
+
+    timer_qom_set_uint(qts, "count", 1020);
+    ctl0 = qtest_readl(qts, FRAME0_BASE +
+                       ARM_ARCH_TIMER_MMIO_CNTBASE_CNTP_CTL);
+    ctl1 = qtest_readl(qts, FRAME1_BASE +
+                       ARM_ARCH_TIMER_MMIO_CNTBASE_CNTP_CTL);
+    g_assert_cmpuint(ctl0 & ARM_ARCH_TIMER_MMIO_CNTP_CTL_ISTAT, !=, 0);
+    g_assert_cmpuint(ctl1 & ARM_ARCH_TIMER_MMIO_CNTP_CTL_ISTAT, !=, 0);
+    g_assert_true(qtest_get_irq(qts, 0));
+    g_assert_true(qtest_get_irq(qts, 1));
+
+    timer_qtest_stop(&t);
+}
+
+static void test_external_counter_deadline_contract(void)
+{
+    TimerQTest t = timer_qtest_start_external();
+    QTestState *qts = t.qts;
+
+    qtest_irq_intercept_out_named(qts, "/machine/peripheral/archtimer",
+                                  "sysbus-irq");
+    timer_qom_set_uint(qts, "count", 1000);
+    timer_write64(qts, FRAME0_BASE,
+                  ARM_ARCH_TIMER_MMIO_CNTBASE_CNTP_CVAL_LO, 1010);
+    qtest_writel(qts, FRAME0_BASE + ARM_ARCH_TIMER_MMIO_CNTBASE_CNTP_CTL,
+                 ARM_ARCH_TIMER_MMIO_CNTP_CTL_ENABLE);
+    qtest_clock_step(qts, NS_PER_10_TICKS - 1);
+    g_assert_false(qtest_get_irq(qts, 0));
+    qtest_clock_step(qts, 1);
+    g_assert_true(qtest_get_irq(qts, 0));
+
+    qtest_writel(qts, FRAME0_BASE + ARM_ARCH_TIMER_MMIO_CNTBASE_CNTP_CTL, 0);
+    timer_qom_set_uint(qts, "count", 2000);
+    timer_write64(qts, FRAME0_BASE,
+                  ARM_ARCH_TIMER_MMIO_CNTBASE_CNTP_CVAL_LO, 2010);
+    qtest_writel(qts, FRAME0_BASE + ARM_ARCH_TIMER_MMIO_CNTBASE_CNTP_CTL,
+                 ARM_ARCH_TIMER_MMIO_CNTP_CTL_ENABLE);
+    timer_qom_set_uint(qts, "count", 2011);
+    g_assert_true(qtest_get_irq(qts, 0));
+
+    qtest_writel(qts, FRAME0_BASE + ARM_ARCH_TIMER_MMIO_CNTBASE_CNTP_CTL, 0);
+    timer_qom_set_uint(qts, "count", 3000);
+    timer_write64(qts, FRAME0_BASE,
+                  ARM_ARCH_TIMER_MMIO_CNTBASE_CNTP_CVAL_LO, 2999);
+    qtest_writel(qts, FRAME0_BASE + ARM_ARCH_TIMER_MMIO_CNTBASE_CNTP_CTL,
+                 ARM_ARCH_TIMER_MMIO_CNTP_CTL_ENABLE);
+    g_assert_true(qtest_get_irq(qts, 0));
+
+    qtest_writel(qts, FRAME0_BASE + ARM_ARCH_TIMER_MMIO_CNTBASE_CNTP_CTL, 0);
+    timer_qom_set_uint(qts, "count", UINT64_MAX - 5);
+    timer_write64(qts, FRAME0_BASE,
+                  ARM_ARCH_TIMER_MMIO_CNTBASE_CNTP_CVAL_LO, 3);
+    qtest_writel(qts, FRAME0_BASE + ARM_ARCH_TIMER_MMIO_CNTBASE_CNTP_CTL,
+                 ARM_ARCH_TIMER_MMIO_CNTP_CTL_ENABLE);
+    g_assert_true(qtest_get_irq(qts, 0));
+
+    timer_qtest_stop(&t);
+}
+
+static void test_frame_access_control(void)
+{
+    TimerQTest t = timer_qtest_start_raw(",access-control=on");
+    QTestState *qts = t.qts;
+
+    g_assert_cmpuint(qtest_readl(qts, FRAME0_BASE +
+                                ARM_ARCH_TIMER_MMIO_CNTBASE_CNTFRQ), ==, 0);
+    g_assert_cmpuint(qtest_readl(qts, FRAME0_BASE +
+                                ARM_ARCH_TIMER_MMIO_CNTBASE_PID4), ==, 4);
+    g_assert_cmpuint(qtest_readl(qts, FRAME0_BASE +
+                                ARM_ARCH_TIMER_MMIO_CNTBASE_CID3), ==, 0xb1);
+    g_assert_cmpuint(qtest_readl(qts, FRAME1_BASE +
+                                ARM_ARCH_TIMER_MMIO_CNTBASE_PID4), ==, 4);
+    qtest_writel(qts, FRAME0_BASE + ARM_ARCH_TIMER_MMIO_CNTBASE_CNTP_CTL,
+                 ARM_ARCH_TIMER_MMIO_CNTP_CTL_ENABLE);
+    g_assert_cmpuint(qtest_readl(qts, FRAME0_BASE +
+                                ARM_ARCH_TIMER_MMIO_CNTBASE_CNTP_CTL), ==, 0);
+
+    qtest_writel(qts, TIMER_BASE + ARM_ARCH_TIMER_MMIO_CNTCTL_CNTACR_BASE,
+                 ARM_ARCH_TIMER_MMIO_CNTACR_RFRQ |
+                 ARM_ARCH_TIMER_MMIO_CNTACR_RWPT);
+    g_assert_cmpuint(qtest_readl(qts, FRAME0_BASE +
+                                ARM_ARCH_TIMER_MMIO_CNTBASE_CNTFRQ), ==,
+                     TEST_CNTFRQ);
+    g_assert_cmpuint(qtest_readl(qts, FRAME1_BASE +
+                                ARM_ARCH_TIMER_MMIO_CNTBASE_CNTFRQ), ==, 0);
+    g_assert_cmpuint(qtest_readl_nonsecure(qts, FRAME0_BASE +
+                                          ARM_ARCH_TIMER_MMIO_CNTBASE_CNTFRQ),
+                     ==, 0);
+    qtest_writel_nonsecure(qts,
+                           TIMER_BASE +
+                           ARM_ARCH_TIMER_MMIO_CNTCTL_CNTACR_BASE + 4,
+                           0x3f);
+    g_assert_cmpuint(qtest_readl(qts, TIMER_BASE +
+                                ARM_ARCH_TIMER_MMIO_CNTCTL_CNTACR_BASE + 4),
+                     ==, 0);
+    g_assert_cmpuint(qtest_readl(qts, TIMER_BASE +
+                                ARM_ARCH_TIMER_MMIO_CNTCTL_CNTNSAR), ==, 0);
+    qtest_writel(qts, TIMER_BASE + ARM_ARCH_TIMER_MMIO_CNTCTL_CNTNSAR, 1);
+    g_assert_cmpuint(qtest_readl(qts, TIMER_BASE +
+                                ARM_ARCH_TIMER_MMIO_CNTCTL_CNTNSAR), ==, 1);
+    g_assert_cmpuint(qtest_readl_nonsecure(qts, FRAME0_BASE +
+                                          ARM_ARCH_TIMER_MMIO_CNTBASE_CNTFRQ),
+                     ==, TEST_CNTFRQ);
+
+    timer_qtest_stop(&t);
+}
+
+static void test_legacy_access_control_default_off(void)
+{
+    TimerQTest t = timer_qtest_start_raw("");
+    QTestState *qts = t.qts;
+
+    g_assert_cmpuint(qtest_readl(qts, FRAME0_BASE +
+                                ARM_ARCH_TIMER_MMIO_CNTBASE_CNTFRQ),
+                     ==, TEST_CNTFRQ);
+    qtest_writel(qts, FRAME0_BASE + ARM_ARCH_TIMER_MMIO_CNTBASE_CNTP_CTL,
+                 ARM_ARCH_TIMER_MMIO_CNTP_CTL_ENABLE);
+    g_assert_cmpuint(qtest_readl(qts, FRAME0_BASE +
+                                ARM_ARCH_TIMER_MMIO_CNTBASE_CNTP_CTL) &
+                     ARM_ARCH_TIMER_MMIO_CNTP_CTL_ENABLE, !=, 0);
+
+    timer_qtest_stop(&t);
+}
+
+static void test_frame_access_control_reset_values(void)
+{
+    TimerQTest t = timer_qtest_start_raw(
+        ",access-control=on,cntnsar-reset=1,cntacr-reset-0=0x3f");
+    QTestState *qts = t.qts;
+
+    g_assert_cmpuint(qtest_readl(qts, TIMER_BASE +
+                                ARM_ARCH_TIMER_MMIO_CNTCTL_CNTNSAR), ==, 1);
+    g_assert_cmpuint(qtest_readl(qts, TIMER_BASE +
+                                ARM_ARCH_TIMER_MMIO_CNTCTL_CNTACR_BASE),
+                     ==, 0x3f);
+    g_assert_cmpuint(qtest_readl_nonsecure(qts, FRAME0_BASE +
+                                          ARM_ARCH_TIMER_MMIO_CNTBASE_CNTFRQ),
+                     ==, TEST_CNTFRQ);
+    g_assert_cmpuint(qtest_readl(qts, FRAME1_BASE +
+                                ARM_ARCH_TIMER_MMIO_CNTBASE_CNTFRQ), ==, 0);
+
+    qtest_writel(qts, TIMER_BASE + ARM_ARCH_TIMER_MMIO_CNTCTL_CNTNSAR, 0);
+    qtest_writel(qts, TIMER_BASE + ARM_ARCH_TIMER_MMIO_CNTCTL_CNTACR_BASE, 0);
+    qtest_system_reset(qts);
+
+    g_assert_cmpuint(qtest_readl(qts, TIMER_BASE +
+                                ARM_ARCH_TIMER_MMIO_CNTCTL_CNTNSAR), ==, 1);
+    g_assert_cmpuint(qtest_readl(qts, TIMER_BASE +
+                                ARM_ARCH_TIMER_MMIO_CNTCTL_CNTACR_BASE),
+                     ==, 0x3f);
+
+    timer_qtest_stop(&t);
+}
+
+static void test_external_counter_frequency_mismatch_rejected(void)
+{
+    const char *qemu = qtest_qemu_binary(NULL);
+    char *dtb_path;
+    char *provider;
+    char *timer;
+    char *stderr_text = NULL;
+    GError *err = NULL;
+    int status;
+    bool spawned;
+
+    timer_qtest_write_dtb(&dtb_path);
+    provider = g_strdup_printf("arm-generic-timer-counter-test,id=counter,"
+                               "visible-frequency=%" PRIu64,
+                               TEST_CNTFRQ / 2);
+    timer = g_strdup_printf(TYPE_ARM_ARCH_TIMER_MMIO ",id=archtimer,"
+                            "cntfrq=%" PRIu64 ",counter-provider="
+                            TEST_PROVIDER_PATH, TEST_CNTFRQ);
+    const char *argv[] = {
+        qemu, "-nodefaults", "-display", "none",
+        "-machine", "virt", "-dtb", dtb_path,
+        "-accel", "qtest", "-qtest", "stdio", "-device", provider,
+        "-device", timer, NULL,
+    };
+
+    spawned = g_spawn_sync(NULL, (char **)argv, NULL, 0, NULL, NULL, NULL,
+                           &stderr_text, &status, &err);
+    g_assert_no_error(err);
+    g_assert_true(spawned);
+    g_assert_true(WIFEXITED(status));
+    g_assert_cmpint(WEXITSTATUS(status), !=, 0);
+    g_assert_nonnull(strstr(stderr_text, "does not match CNTFRQ"));
+
+    g_free(stderr_text);
+    g_free(timer);
+    g_free(provider);
+    unlink(dtb_path);
+    g_free(dtb_path);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
@@ -242,6 +520,18 @@ int main(int argc, char **argv)
                    test_non_monotonic_frame_offsets);
     qtest_add_func("/arm-arch-timer-mmio/64bit-cval-access",
                    test_64bit_cval_access);
+    qtest_add_func("/arm-arch-timer-mmio/external-counter-deadline-notify",
+                   test_external_counter_deadline_notify);
+    qtest_add_func("/arm-arch-timer-mmio/external-counter-deadline-contract",
+                   test_external_counter_deadline_contract);
+    qtest_add_func("/arm-arch-timer-mmio/frame-access-control",
+                   test_frame_access_control);
+    qtest_add_func("/arm-arch-timer-mmio/legacy-access-control-default-off",
+                   test_legacy_access_control_default_off);
+    qtest_add_func("/arm-arch-timer-mmio/frame-access-control-reset-values",
+                   test_frame_access_control_reset_values);
+    qtest_add_func("/arm-arch-timer-mmio/external-counter-frequency-mismatch",
+                   test_external_counter_frequency_mismatch_rejected);
 
     return g_test_run();
 }

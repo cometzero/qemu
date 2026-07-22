@@ -3,6 +3,7 @@
 #define HW_TIMER_ARM_ARCH_TIMER_MMIO_H
 
 #include "hw/core/sysbus.h"
+#include "hw/timer/arm_generic_timer_counter.h"
 #include "qemu/timer.h"
 
 #define TYPE_ARM_ARCH_TIMER_MMIO "arm_arch_timer_mmio"
@@ -12,7 +13,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(ArmArchTimerMMIOState, ARM_ARCH_TIMER_MMIO)
 #define ARM_ARCH_TIMER_MMIO_CNTBaseN_NAME "CNTBase"
 
 #define ARM_ARCH_TIMER_MMIO_CNTCTL_CNTFRQ      0x000
-#define ARM_ARCH_TIMER_MMIO_CNTCTL_CNTSR       0x004
+#define ARM_ARCH_TIMER_MMIO_CNTCTL_CNTNSAR     0x004
 #define ARM_ARCH_TIMER_MMIO_CNTCTL_CNTTID      0x008
 #define ARM_ARCH_TIMER_MMIO_CNTCTL_CNTACR_BASE 0x040
 
@@ -25,10 +26,32 @@ OBJECT_DECLARE_SIMPLE_TYPE(ArmArchTimerMMIOState, ARM_ARCH_TIMER_MMIO)
 #define ARM_ARCH_TIMER_MMIO_CNTBASE_CNTP_CVAL_HI 0x024
 #define ARM_ARCH_TIMER_MMIO_CNTBASE_CNTP_TVAL    0x028
 #define ARM_ARCH_TIMER_MMIO_CNTBASE_CNTP_CTL     0x02c
+#define ARM_ARCH_TIMER_MMIO_CNTBASE_PID4          0xfd0
+#define ARM_ARCH_TIMER_MMIO_CNTBASE_CID3          0xffc
 
 #define ARM_ARCH_TIMER_MMIO_CNTP_CTL_ENABLE 0x1
 #define ARM_ARCH_TIMER_MMIO_CNTP_CTL_IMASK  0x2
 #define ARM_ARCH_TIMER_MMIO_CNTP_CTL_ISTAT  0x4
+
+#define ARM_ARCH_TIMER_MMIO_CNTACR_RPCT     (1U << 0)
+#define ARM_ARCH_TIMER_MMIO_CNTACR_RFRQ     (1U << 2)
+#define ARM_ARCH_TIMER_MMIO_CNTACR_RWPT     (1U << 5)
+
+typedef struct ArmArchTimerMMIOFrameSnapshot {
+    int64_t qemu_virtual_ns;
+    uint64_t count;
+    uint64_t cval;
+    uint32_t cntfrq;
+    uint32_t cntacr;
+    uint32_t cntpl0acr;
+    uint32_t cntnsar;
+    uint32_t cntnsar_implemented;
+    uint32_t ctl;
+    uint32_t irq_level;
+    uint32_t count_accessible;
+    uint32_t frequency_accessible;
+    uint32_t timer_accessible;
+} ArmArchTimerMMIOFrameSnapshot;
 
 typedef struct ArmArchTimerMMIOFrame {
     void *parent;
@@ -38,6 +61,7 @@ typedef struct ArmArchTimerMMIOFrame {
     uint32_t cntpl0acr;
     qemu_irq irq;
     QEMUTimer *timer;
+    bool irq_level;
 } ArmArchTimerMMIOFrame;
 
 struct ArmArchTimerMMIOState {
@@ -49,8 +73,20 @@ struct ArmArchTimerMMIOState {
     uint64_t view_size;
     uint64_t frame_offset[ARM_ARCH_TIMER_MMIO_MAX_FRAMES];
     uint32_t frame_id[ARM_ARCH_TIMER_MMIO_MAX_FRAMES];
+    uint32_t cntacr_reset[ARM_ARCH_TIMER_MMIO_MAX_FRAMES];
     uint32_t cntacr[ARM_ARCH_TIMER_MMIO_MAX_FRAMES];
+    uint32_t cntnsar_reset;
+    uint32_t cntnsar;
+    bool access_control;
     ArmArchTimerMMIOFrame frame[ARM_ARCH_TIMER_MMIO_MAX_FRAMES];
+    ArmGenericTimerCounter *counter_provider;
+    Notifier counter_notifier;
+    bool counter_notifier_registered;
+    Error *migration_blocker;
 };
+
+bool arm_arch_timer_mmio_get_frame_snapshot(
+    ArmArchTimerMMIOState *s, uint32_t frame,
+    ArmArchTimerMMIOFrameSnapshot *snapshot);
 
 #endif

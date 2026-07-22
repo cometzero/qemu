@@ -1,3 +1,4 @@
+system_ss.add(files('arm_generic_timer_counter.c'))
 system_ss.add(when: 'CONFIG_A9_GTIMER', if_true: files('a9gtimer.c'))
 system_ss.add(when: 'CONFIG_ALLWINNER_A10_PIT', if_true: files('allwinner-a10-pit.c'))
 system_ss.add(when: 'CONFIG_ARM_MPTIMER', if_true: files('arm_mptimer.c'))

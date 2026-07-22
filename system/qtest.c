@@ -510,6 +510,7 @@ static void qtest_process_command(CharFrontend *chr, gchar **words)
                strcmp(words[0], "writeq") == 0) {
         uint64_t addr;
         uint64_t value;
+        MemTxAttrs attrs = MEMTXATTRS_UNSPECIFIED;
         int ret;
 
         g_assert(words[1] && words[2]);
@@ -517,26 +518,25 @@ static void qtest_process_command(CharFrontend *chr, gchar **words)
         g_assert(ret == 0);
         ret = qemu_strtou64(words[2], NULL, 0, &value);
         g_assert(ret == 0);
+        if (words[3] && strcmp(words[3], "nonsecure") == 0) {
+            attrs = (MemTxAttrs) { .secure = false };
+        }
 
         if (words[0][5] == 'b') {
             uint8_t data = value;
-            address_space_write(first_cpu->as, addr, MEMTXATTRS_UNSPECIFIED,
-                                &data, 1);
+            address_space_write(first_cpu->as, addr, attrs, &data, 1);
         } else if (words[0][5] == 'w') {
             uint16_t data = value;
             tswap16s(&data);
-            address_space_write(first_cpu->as, addr, MEMTXATTRS_UNSPECIFIED,
-                                &data, 2);
+            address_space_write(first_cpu->as, addr, attrs, &data, 2);
         } else if (words[0][5] == 'l') {
             uint32_t data = value;
             tswap32s(&data);
-            address_space_write(first_cpu->as, addr, MEMTXATTRS_UNSPECIFIED,
-                                &data, 4);
+            address_space_write(first_cpu->as, addr, attrs, &data, 4);
         } else if (words[0][5] == 'q') {
             uint64_t data = value;
             tswap64s(&data);
-            address_space_write(first_cpu->as, addr, MEMTXATTRS_UNSPECIFIED,
-                                &data, 8);
+            address_space_write(first_cpu->as, addr, attrs, &data, 8);
         }
         qtest_send(chr, "OK\n");
     } else if (strcmp(words[0], "readb") == 0 ||
@@ -545,30 +545,30 @@ static void qtest_process_command(CharFrontend *chr, gchar **words)
                strcmp(words[0], "readq") == 0) {
         uint64_t addr;
         uint64_t value = UINT64_C(-1);
+        MemTxAttrs attrs = MEMTXATTRS_UNSPECIFIED;
         int ret;
 
         g_assert(words[1]);
         ret = qemu_strtou64(words[1], NULL, 0, &addr);
         g_assert(ret == 0);
+        if (words[2] && strcmp(words[2], "nonsecure") == 0) {
+            attrs = (MemTxAttrs) { .secure = false };
+        }
 
         if (words[0][4] == 'b') {
             uint8_t data;
-            address_space_read(first_cpu->as, addr, MEMTXATTRS_UNSPECIFIED,
-                               &data, 1);
+            address_space_read(first_cpu->as, addr, attrs, &data, 1);
             value = data;
         } else if (words[0][4] == 'w') {
             uint16_t data;
-            address_space_read(first_cpu->as, addr, MEMTXATTRS_UNSPECIFIED,
-                               &data, 2);
+            address_space_read(first_cpu->as, addr, attrs, &data, 2);
             value = tswap16(data);
         } else if (words[0][4] == 'l') {
             uint32_t data;
-            address_space_read(first_cpu->as, addr, MEMTXATTRS_UNSPECIFIED,
-                               &data, 4);
+            address_space_read(first_cpu->as, addr, attrs, &data, 4);
             value = tswap32(data);
         } else if (words[0][4] == 'q') {
-            address_space_read(first_cpu->as, addr, MEMTXATTRS_UNSPECIFIED,
-                               &value, 8);
+            address_space_read(first_cpu->as, addr, attrs, &value, 8);
             tswap64s(&value);
         }
         qtest_sendf(chr, "OK 0x%016" PRIx64 "\n", value);
@@ -707,6 +707,22 @@ static void qtest_process_command(CharFrontend *chr, gchar **words)
         } else {
             qtest_sendf(chr, "OK little\n");
         }
+    } else if (qtest_enabled() && strcmp(words[0], "clock_get") == 0) {
+        qtest_sendf(chr, "OK %" PRIi64 "\n",
+                    qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
+    } else if (qtest_enabled() && strcmp(words[0], "device_reset") == 0) {
+        Object *obj;
+        DeviceState *dev;
+
+        g_assert(words[1]);
+        obj = object_resolve_path(words[1], NULL);
+        dev = (DeviceState *)object_dynamic_cast(obj, TYPE_DEVICE);
+        if (!dev) {
+            qtest_send(chr, "FAIL Unknown device\n");
+            return;
+        }
+        device_cold_reset(dev);
+        qtest_send(chr, "OK\n");
     } else if (qtest_enabled() && strcmp(words[0], "clock_step") == 0) {
         int64_t old_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
         int64_t ns, new_ns;

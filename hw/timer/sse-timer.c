@@ -131,6 +131,7 @@ static void sse_update_irq(SSETimer *s)
                      sse_timer_status(s));
 
     qemu_set_irq(s->irq, irqstate);
+    s->irq_level = irqstate;
 }
 
 static void sse_set_timer(SSETimer *s, uint64_t nexttick)
@@ -382,6 +383,33 @@ static void sse_timer_reset(DeviceState *dev)
     s->cntp_aival = 0;
     s->cntp_aival_ctl = 0;
     s->cntp_aival_reload = 0;
+    qemu_set_irq(s->irq, 0);
+    s->irq_level = false;
+}
+
+bool sse_timer_get_snapshot(SSECounter *counter, SSETimer *timer,
+                            ArmSSETimerSnapshot *snapshot)
+{
+    uint32_t ctl;
+
+    if (!snapshot || timer->counter != counter) {
+        return false;
+    }
+
+    sse_update_irq(timer);
+    ctl = timer->cntp_ctl;
+    if (sse_timer_status(timer)) {
+        ctl |= R_CNTP_CTL_ISTATUS_MASK;
+    }
+    snapshot->qemu_virtual_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    snapshot->count = sse_counter_for_timestamp(
+        counter, snapshot->qemu_virtual_ns);
+    snapshot->cval = timer->cntp_cval;
+    snapshot->counter_frequency_hz = clock_get_hz(counter->clk);
+    snapshot->cntfrq = timer->cntfrq;
+    snapshot->ctl = ctl;
+    snapshot->irq_level = timer->irq_level;
+    return true;
 }
 
 static void sse_timer_counter_callback(Notifier *notifier, void *data)
@@ -420,8 +448,20 @@ static void sse_timer_realize(DeviceState *dev, Error **errp)
 
     s->counter_notifier.notify = sse_timer_counter_callback;
     sse_counter_register_consumer(s->counter, &s->counter_notifier);
+    s->counter_notifier_registered = true;
 
     timer_init_ns(&s->timer, QEMU_CLOCK_VIRTUAL, sse_timer_cb, s);
+}
+
+static void sse_timer_unrealize(DeviceState *dev)
+{
+    SSETimer *s = SSE_TIMER(dev);
+
+    if (s->counter_notifier_registered) {
+        sse_counter_unregister_consumer(s->counter, &s->counter_notifier);
+        s->counter_notifier_registered = false;
+    }
+    timer_deinit(&s->timer);
 }
 
 static const VMStateDescription sse_timer_vmstate = {
@@ -449,6 +489,7 @@ static void sse_timer_class_init(ObjectClass *klass, const void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->realize = sse_timer_realize;
+    dc->unrealize = sse_timer_unrealize;
     dc->vmsd = &sse_timer_vmstate;
     device_class_set_legacy_reset(dc, sse_timer_reset);
     device_class_set_props(dc, sse_timer_properties);

@@ -36,6 +36,8 @@
 #include "target/arm/cpu-sysregs.h"
 #include "target/arm/mmuidx.h"
 
+typedef struct ArmGenericTimerCounter ArmGenericTimerCounter;
+
 #define EXCP_UDEF            1   /* undefined instruction */
 #define EXCP_SWI             2   /* software interrupt */
 #define EXCP_PREFETCH_ABORT  3
@@ -982,9 +984,17 @@ struct ArchCPU {
     QEMUTimer *pmu_timer;
     /* Timer used for WFxT timeouts */
     QEMUTimer *wfxt_timer;
+    uint64_t wfxt_deadline_count;
+    bool wfxt_deadline_active;
+
+    ArmGenericTimerCounter *counter_provider;
+    Notifier counter_notifier;
+    bool counter_notifier_registered;
+    Error *counter_migration_blocker;
 
     /* GPIO outputs for generic timer */
     qemu_irq gt_timer_outputs[NUM_GTIMERS];
+    bool gt_timer_output_level[NUM_GTIMERS];
     /* GPIO output for GICv3 maintenance interrupt signal */
     qemu_irq gicv3_maintenance_interrupt;
     /* GPIO output for the PMU interrupt */

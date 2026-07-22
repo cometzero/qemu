@@ -175,6 +175,26 @@ LibQemuExports *LIBQEMU_INIT_SYM(int argc, char **argv)
     return &context.exports;
 }
 
+LibQemuExports *LIBQEMU_INIT_V2_SYM(int argc, char **argv,
+                                    uint32_t requested_abi,
+                                    size_t caller_struct_size,
+                                    size_t *actual_size)
+{
+    size_t exports_size = sizeof(context.exports);
+
+    if (actual_size) {
+        *actual_size = exports_size;
+    }
+    if (requested_abi != LIBQEMU_ABI_VERSION ||
+        caller_struct_size < LIBQEMU_V2_MIN_STRUCT_SIZE) {
+        return NULL;
+    }
+
+    libqemu_exports_fill(&context.exports);
+    start_iothread(argc, argv);
+    return &context.exports;
+}
+
 void libqemu_set_cpu_end_of_loop_cb(LibQemuCpuEndOfLoopFn cb, void *opaque)
 {
     context.cpu_end_of_loop_cb.cb = cb;

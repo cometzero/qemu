@@ -487,3 +487,61 @@ ExportedFct(
 )
 ExportedFct('fw_cfg_find', 'FWCfgState *', [])
 ExportedFct('fw_cfg_set_dma_as', 'void', ['FWCfgState *', 'AddressSpace *'])
+
+PublicInclude('libqemu/wrappers/arm-generic-timer.h')
+PrivateInclude('libqemu/wrappers/target/arm.h', arch = 'arm')
+ExportedFct('arm_generic_timer_counter_proxy_new', 'Object *',
+        ['const LibQemuArmGenericTimerCounterCallbacks *', 'void *'],
+        priv = 'libqemu_arm_generic_timer_counter_proxy_new',
+        on_iothread = True, arch = 'arm')
+ExportedFct('arm_generic_timer_counter_proxy_clear', 'void', ['Object *'],
+        priv = 'libqemu_arm_generic_timer_counter_proxy_clear',
+        on_iothread = True, arch = 'arm')
+ExportedFct('arm_generic_timer_counter_notify', 'void', ['Object *'],
+        priv = 'libqemu_arm_generic_timer_counter_notify',
+        iothread_locked = True, arch = 'arm')
+ExportedFct('cpu_arm_connect_generic_timer_output', 'void',
+        ['Object *', 'LibQemuArmGenericTimerOutput', 'struct IRQState *'],
+        priv = 'libqemu_cpu_arm_connect_generic_timer_output',
+        on_iothread = True, arch = 'arm')
+
+PrivateInclude('libqemu/wrappers/clock.h')
+ExportedType('QemuClock', 'Clock')
+ExportedFct('clock_new', 'Clock *', ['Object *', 'const char *'],
+        priv = 'libqemu_clock_new', on_iothread = True)
+ExportedFct('clock_update_hz', 'bool', ['Clock *', 'uint64_t'],
+        priv = 'libqemu_clock_update_hz', on_iothread = True)
+ExportedFct('qdev_connect_clock_in', 'void',
+        ['DeviceState *', 'const char *', 'Clock *'],
+        priv = 'libqemu_qdev_connect_clock_in', on_iothread = True)
+ExportedFct('device_cold_reset', 'void', ['DeviceState *'],
+        priv = 'libqemu_device_cold_reset', iothread_locked = True)
+
+PublicInclude('libqemu/wrappers/iothread-job.h')
+PrivateInclude('libqemu/wrappers/iothread-job.h')
+ExportedFct('iothread_job_new', 'LibQemuIOThreadJob *',
+        ['LibQemuIOThreadJobFn', 'void *'],
+        priv = 'libqemu_iothread_job_new', on_iothread = True)
+ExportedFct('iothread_job_schedule', 'bool', ['LibQemuIOThreadJob *'],
+        priv = 'libqemu_iothread_job_schedule')
+ExportedFct('iothread_job_cancel', 'void', ['LibQemuIOThreadJob *'],
+        priv = 'libqemu_iothread_job_cancel')
+ExportedFct('iothread_job_drain', 'void', ['LibQemuIOThreadJob *'],
+        priv = 'libqemu_iothread_job_drain')
+ExportedFct('iothread_job_free', 'void', ['LibQemuIOThreadJob *'],
+        priv = 'libqemu_iothread_job_free', on_iothread = True)
+ExportedFct('iothread_job_stop', 'void', ['LibQemuIOThreadJob *'],
+        priv = 'libqemu_iothread_job_stop')
+ExportedFct('cpu_arm_generic_timer_snapshot', 'bool',
+        ['Object *', 'LibQemuArmGenericTimerOutput',
+         'LibQemuArmCpuGenericTimerSnapshot *'],
+        priv = 'libqemu_cpu_arm_generic_timer_snapshot',
+        iothread_locked = True, arch = 'arm')
+ExportedFct('arm_arch_timer_mmio_frame_snapshot', 'bool',
+        ['Object *', 'uint32_t', 'LibQemuArmArchTimerMMIOFrameSnapshot *'],
+        priv = 'libqemu_arm_arch_timer_mmio_frame_snapshot',
+        iothread_locked = True, arch = 'arm')
+ExportedFct('arm_sse_timer_snapshot', 'bool',
+        ['Object *', 'Object *', 'LibQemuArmSSETimerSnapshot *'],
+        priv = 'libqemu_arm_sse_timer_snapshot',
+        iothread_locked = True, arch = 'arm')

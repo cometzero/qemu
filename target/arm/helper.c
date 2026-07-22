@@ -21,6 +21,7 @@
 #include "exec/cputlb.h"
 #include "exec/translation-block.h"
 #include "hw/core/irq.h"
+#include "hw/timer/arm_generic_timer_counter.h"
 #include "system/cpu-timers.h"
 #include "exec/icount.h"
 #include "system/kvm.h"
@@ -1349,7 +1350,32 @@ uint64_t gt_get_countervalue(CPUARMState *env)
 {
     ARMCPU *cpu = env_archcpu(env);
 
+    if (cpu->counter_provider) {
+        return arm_generic_timer_counter_count_at_ns(
+            cpu->counter_provider, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
+    }
+
     return qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) / gt_cntfrq_period_ns(cpu);
+}
+
+void arm_gt_timer_mod(ARMCPU *cpu, QEMUTimer *timer, uint64_t nexttick)
+{
+    if (cpu->counter_provider) {
+        int64_t deadline_ns;
+        int64_t now_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+
+        if (arm_generic_timer_counter_deadline_ns(cpu->counter_provider,
+                                                  nexttick, now_ns,
+                                                  &deadline_ns)) {
+            timer_mod_ns(timer, deadline_ns);
+        } else {
+            timer_del(timer);
+        }
+    } else if (nexttick > INT64_MAX / gt_cntfrq_period_ns(cpu)) {
+        timer_mod_ns(timer, INT64_MAX);
+    } else {
+        timer_mod(timer, nexttick);
+    }
 }
 
 static void gt_update_irq(ARMCPU *cpu, int timeridx)
@@ -1371,6 +1397,7 @@ static void gt_update_irq(ARMCPU *cpu, int timeridx)
     }
 
     qemu_set_irq(cpu->gt_timer_outputs[timeridx], irqstate);
+    cpu->gt_timer_output_level[timeridx] = irqstate;
     trace_arm_gt_update_irq(timeridx, irqstate);
 }
 
@@ -1472,7 +1499,7 @@ uint64_t gt_direct_access_timer_offset(CPUARMState *env, int timeridx)
     }
 }
 
-static void gt_recalc_timer(ARMCPU *cpu, int timeridx)
+void arm_gt_recalc_timer(ARMCPU *cpu, int timeridx)
 {
     ARMGenericTimer *gt = &cpu->env.cp15.c14_timer[timeridx];
 
@@ -1519,11 +1546,7 @@ static void gt_recalc_timer(ARMCPU *cpu, int timeridx)
          * set the timer for as far in the future as possible. When the
          * timer expires we will reset the timer for any remaining period.
          */
-        if (nexttick > INT64_MAX / gt_cntfrq_period_ns(cpu)) {
-            timer_mod_ns(cpu->gt_timer[timeridx], INT64_MAX);
-        } else {
-            timer_mod(cpu->gt_timer[timeridx], nexttick);
-        }
+        arm_gt_timer_mod(cpu, cpu->gt_timer[timeridx], nexttick);
         trace_arm_gt_recalc(timeridx, nexttick);
     } else {
         /* Timer disabled: ISTATUS and timer output always clear */
@@ -1532,6 +1555,19 @@ static void gt_recalc_timer(ARMCPU *cpu, int timeridx)
         trace_arm_gt_recalc_disabled(timeridx);
     }
     gt_update_irq(cpu, timeridx);
+}
+
+void arm_gt_counter_provider_changed(Notifier *notifier, void *data)
+{
+    ARMCPU *cpu = container_of(notifier, ARMCPU, counter_notifier);
+    int timeridx;
+
+    for (timeridx = 0; timeridx < NUM_GTIMERS; timeridx++) {
+        arm_gt_recalc_timer(cpu, timeridx);
+    }
+    if (cpu->wfxt_deadline_active) {
+        arm_gt_timer_mod(cpu, cpu->wfxt_timer, cpu->wfxt_deadline_count);
+    }
 }
 
 static void gt_timer_reset(CPUARMState *env, const ARMCPRegInfo *ri,
@@ -1560,7 +1596,7 @@ static void gt_cval_write(CPUARMState *env, const ARMCPRegInfo *ri,
 {
     trace_arm_gt_cval_write(timeridx, value);
     env->cp15.c14_timer[timeridx].cval = value;
-    gt_recalc_timer(env_archcpu(env), timeridx);
+    arm_gt_recalc_timer(env_archcpu(env), timeridx);
 }
 
 static uint64_t do_tval_read(CPUARMState *env, int timeridx, uint64_t offset)
@@ -1583,7 +1619,7 @@ static void do_tval_write(CPUARMState *env, int timeridx, uint64_t value,
     trace_arm_gt_tval_write(timeridx, value);
     env->cp15.c14_timer[timeridx].cval = gt_get_countervalue(env) - offset +
                                          sextract64(value, 0, 32);
-    gt_recalc_timer(env_archcpu(env), timeridx);
+    arm_gt_recalc_timer(env_archcpu(env), timeridx);
 }
 
 static void gt_tval_write(CPUARMState *env, const ARMCPRegInfo *ri,
@@ -1606,7 +1642,7 @@ static void gt_ctl_write(CPUARMState *env, const ARMCPRegInfo *ri,
     env->cp15.c14_timer[timeridx].ctl = deposit64(oldval, 0, 2, value);
     if ((oldval ^ value) & 1) {
         /* Enable toggled */
-        gt_recalc_timer(cpu, timeridx);
+        arm_gt_recalc_timer(cpu, timeridx);
     } else if ((oldval ^ value) & 2) {
         /*
          * IMASK toggled: don't need to recalculate,
@@ -1797,7 +1833,7 @@ static void gt_cntvoff_write(CPUARMState *env, const ARMCPRegInfo *ri,
 
     trace_arm_gt_cntvoff_write(value);
     raw_write(env, ri, value);
-    gt_recalc_timer(cpu, GTIMER_VIRT);
+    arm_gt_recalc_timer(cpu, GTIMER_VIRT);
 }
 
 static uint64_t gt_virt_redir_cval_read(CPUARMState *env,
@@ -1986,49 +2022,49 @@ void arm_gt_ptimer_cb(void *opaque)
 {
     ARMCPU *cpu = opaque;
 
-    gt_recalc_timer(cpu, GTIMER_PHYS);
+    arm_gt_recalc_timer(cpu, GTIMER_PHYS);
 }
 
 void arm_gt_vtimer_cb(void *opaque)
 {
     ARMCPU *cpu = opaque;
 
-    gt_recalc_timer(cpu, GTIMER_VIRT);
+    arm_gt_recalc_timer(cpu, GTIMER_VIRT);
 }
 
 void arm_gt_htimer_cb(void *opaque)
 {
     ARMCPU *cpu = opaque;
 
-    gt_recalc_timer(cpu, GTIMER_HYP);
+    arm_gt_recalc_timer(cpu, GTIMER_HYP);
 }
 
 void arm_gt_stimer_cb(void *opaque)
 {
     ARMCPU *cpu = opaque;
 
-    gt_recalc_timer(cpu, GTIMER_SEC);
+    arm_gt_recalc_timer(cpu, GTIMER_SEC);
 }
 
 void arm_gt_sel2timer_cb(void *opaque)
 {
     ARMCPU *cpu = opaque;
 
-    gt_recalc_timer(cpu, GTIMER_S_EL2_PHYS);
+    arm_gt_recalc_timer(cpu, GTIMER_S_EL2_PHYS);
 }
 
 void arm_gt_sel2vtimer_cb(void *opaque)
 {
     ARMCPU *cpu = opaque;
 
-    gt_recalc_timer(cpu, GTIMER_S_EL2_VIRT);
+    arm_gt_recalc_timer(cpu, GTIMER_S_EL2_VIRT);
 }
 
 void arm_gt_hvtimer_cb(void *opaque)
 {
     ARMCPU *cpu = opaque;
 
-    gt_recalc_timer(cpu, GTIMER_HYPVIRT);
+    arm_gt_recalc_timer(cpu, GTIMER_HYPVIRT);
 }
 
 static const ARMCPRegInfo generic_timer_cp_reginfo[] = {
@@ -2277,7 +2313,7 @@ static void gt_cntpoff_write(CPUARMState *env, const ARMCPRegInfo *ri,
 
     trace_arm_gt_cntpoff_write(value);
     raw_write(env, ri, value);
-    gt_recalc_timer(cpu, GTIMER_PHYS);
+    arm_gt_recalc_timer(cpu, GTIMER_PHYS);
 }
 
 static const ARMCPRegInfo gen_timer_cntpoff_reginfo = {

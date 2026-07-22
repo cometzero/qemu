@@ -160,6 +160,15 @@ void qtest_system_reset(QTestState *s);
 void qtest_system_reset_nowait(QTestState *s);
 
 /**
+ * qtest_device_reset:
+ * @s: #QTestState instance to operate on.
+ * @qom_path: canonical path of the device to cold reset.
+ *
+ * Reset one device without resetting its siblings or the machine.
+ */
+void qtest_device_reset(QTestState *s, const char *qom_path);
+
+/**
  * qtest_wait_qemu:
  * @s: #QTestState instance to operate on.
  *
@@ -565,6 +574,7 @@ void qtest_writew(QTestState *s, uint64_t addr, uint16_t value);
  * Writes a 32-bit value to memory.
  */
 void qtest_writel(QTestState *s, uint64_t addr, uint32_t value);
+void qtest_writel_nonsecure(QTestState *s, uint64_t addr, uint32_t value);
 
 /**
  * qtest_writeq:
@@ -608,6 +618,7 @@ uint16_t qtest_readw(QTestState *s, uint64_t addr);
  * Returns: Value read.
  */
 uint32_t qtest_readl(QTestState *s, uint64_t addr);
+uint32_t qtest_readl_nonsecure(QTestState *s, uint64_t addr);
 
 /**
  * qtest_readq:
@@ -714,6 +725,14 @@ void qtest_memset(QTestState *s, uint64_t addr, uint8_t patt, size_t size);
  * Returns: The current value of the QEMU_CLOCK_VIRTUAL in nanoseconds.
  */
 int64_t qtest_clock_step_next(QTestState *s);
+
+/**
+ * qtest_clock_get:
+ * @s: #QTestState instance to operate on.
+ *
+ * Returns: The current QEMU_CLOCK_VIRTUAL value in nanoseconds.
+ */
+int64_t qtest_clock_get(QTestState *s);
 
 /**
  * qtest_clock_step:

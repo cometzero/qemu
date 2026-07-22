@@ -1889,6 +1889,9 @@ int delete_hw_watchpoint(vaddr addr, vaddr len, int type);
 
 /* Return the current value of the system counter in ticks */
 uint64_t gt_get_countervalue(CPUARMState *env);
+void arm_gt_counter_provider_changed(Notifier *notifier, void *data);
+void arm_gt_timer_mod(ARMCPU *cpu, QEMUTimer *timer, uint64_t nexttick);
+void arm_gt_recalc_timer(ARMCPU *cpu, int timeridx);
 /*
  * Return the currently applicable offset between the system counter
  * and the counter for the specified timer, as used for direct register

@@ -21,6 +21,7 @@
 #define _LIBQEMU_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #ifndef QEMU_BUILD_BUG_ON
@@ -49,11 +50,28 @@ extern "C" {
 #define libqemu_strify(a) libqemu_strify_(a)
 #define LIBQEMU_INIT_SYM libqemu_init
 #define LIBQEMU_INIT_SYM_STR libqemu_strify(LIBQEMU_INIT_SYM)
+#define LIBQEMU_ABI_VERSION 2U
+#define LIBQEMU_INIT_V2_SYM libqemu_init_v2
+#define LIBQEMU_INIT_V2_SYM_STR libqemu_strify(LIBQEMU_INIT_V2_SYM)
+#define LIBQEMU_V2_MIN_STRUCT_SIZE \
+    (offsetof(LibQemuExports, error_get_pretty) + \
+     sizeof(((LibQemuExports *)0)->error_get_pretty))
+#define LIBQEMU_ARM_TIMER_REQUIRED_STRUCT_SIZE \
+    (offsetof(LibQemuExports, arm_sse_timer_snapshot) + \
+     sizeof(((LibQemuExports *)0)->arm_sse_timer_snapshot))
 
 
 typedef LibQemuExports *(*LibQemuInitFct)(int argc, char **argv);
+typedef LibQemuExports *(*LibQemuInitV2Fct)(int argc, char **argv,
+                                            uint32_t requested_abi,
+                                            size_t caller_struct_size,
+                                            size_t *actual_size);
 
 LIBQEMU_API LibQemuExports *LIBQEMU_INIT_SYM(int argc, char **argv);
+LIBQEMU_API LibQemuExports *LIBQEMU_INIT_V2_SYM(int argc, char **argv,
+                                                uint32_t requested_abi,
+                                                size_t caller_struct_size,
+                                                size_t *actual_size);
 
 #ifdef __cplusplus
 } /* extern "C" */

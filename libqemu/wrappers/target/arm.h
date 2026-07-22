@@ -22,6 +22,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "libqemu/wrappers/arm-generic-timer.h"
 
 void libqemu_cpu_arm_set_cp15_cbar(Object *cpu, uint64_t cbar);
 void libqemu_cpu_arm_set_imp_buildoptr(Object *obj, uint32_t imp_buildoptr_val);
@@ -45,5 +46,19 @@ void libqemu_cpu_arm_register_reset(Object *cpu);
 uint64_t libqemu_cpu_arm_v7m_get_state(Object *cpu, int field);
 bool libqemu_cpu_arm_v7m_set_state(Object *cpu, int field, uint64_t value);
 uint64_t libqemu_cpu_arm_aarch64_get_state(Object *cpu, int field);
+Object *libqemu_arm_generic_timer_counter_proxy_new(
+    const LibQemuArmGenericTimerCounterCallbacks *callbacks, void *opaque);
+void libqemu_arm_generic_timer_counter_proxy_clear(Object *obj);
+void libqemu_arm_generic_timer_counter_notify(Object *obj);
+void libqemu_cpu_arm_connect_generic_timer_output(
+    Object *cpu, LibQemuArmGenericTimerOutput output, struct IRQState *sink);
+bool libqemu_cpu_arm_generic_timer_snapshot(
+    Object *cpu, LibQemuArmGenericTimerOutput output,
+    LibQemuArmCpuGenericTimerSnapshot *snapshot);
+bool libqemu_arm_arch_timer_mmio_frame_snapshot(
+    Object *timer, uint32_t frame,
+    LibQemuArmArchTimerMMIOFrameSnapshot *snapshot);
+bool libqemu_arm_sse_timer_snapshot(
+    Object *counter, Object *timer, LibQemuArmSSETimerSnapshot *snapshot);
 
 #endif

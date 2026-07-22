@@ -129,12 +129,12 @@ uint64_t sse_counter_tick_to_time(SSECounter *s, uint64_t tick)
 
 void sse_counter_register_consumer(SSECounter *s, Notifier *notifier)
 {
-    /*
-     * For the moment we assume that both we and the devices
-     * which consume us last for the life of the simulation,
-     * and so there is no mechanism for removing a notifier.
-     */
     notifier_list_add(&s->notifier_list, notifier);
+}
+
+void sse_counter_unregister_consumer(SSECounter *s, Notifier *notifier)
+{
+    notifier_remove(notifier);
 }
 
 uint64_t sse_counter_for_timestamp(SSECounter *s, uint64_t now)
@@ -246,6 +246,7 @@ static void sse_counter_control_write(void *opaque, hwaddr offset,
                                       uint64_t value, unsigned size)
 {
     SSECounter *s = SSE_COUNTER(opaque);
+    bool enable_changed;
 
     trace_sse_counter_control_write(offset, value, size);
 
@@ -262,7 +263,8 @@ static void sse_counter_control_write(void *opaque, hwaddr offset,
          * don't need to try to recalculate for that case.
          */
         value &= CNTCR_VALID_MASK;
-        if ((value ^ s->cntcr) & R_CNTCR_EN_MASK) {
+        enable_changed = (value ^ s->cntcr) & R_CNTCR_EN_MASK;
+        if (enable_changed) {
             /*
              * Whether the counter is being enabled or disabled, the
              * required action is the same: sync the (ns_then, ticks_then)
@@ -271,9 +273,11 @@ static void sse_counter_control_write(void *opaque, hwaddr offset,
             uint64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
             s->ticks_then = sse_counter_for_timestamp(s, now);
             s->ns_then = now;
-            sse_counter_notify_users(s);
         }
         s->cntcr = value;
+        if (enable_changed) {
+            sse_counter_notify_users(s);
+        }
         break;
     case A_CNTCV_LO:
         sse_write_cntcv(s, value, 0);
@@ -383,6 +387,7 @@ static void sse_counter_reset(DeviceState *dev)
     s->cntscr0 = 0x01000000;
     s->ns_then = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     s->ticks_then = 0;
+    sse_counter_notify_users(s);
 }
 
 static void sse_clk_callback(void *opaque, ClockEvent event)

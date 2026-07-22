@@ -1137,6 +1137,12 @@ int64_t qtest_clock_step_next(QTestState *s)
     return qtest_clock_rsp(s);
 }
 
+int64_t qtest_clock_get(QTestState *s)
+{
+    qtest_sendf(s, "clock_get\n");
+    return qtest_clock_rsp(s);
+}
+
 int64_t qtest_clock_step(QTestState *s, int64_t step)
 {
     qtest_sendf(s, "clock_step %"PRIi64"\n", step);
@@ -1147,6 +1153,12 @@ int64_t qtest_clock_set(QTestState *s, int64_t val)
 {
     qtest_sendf(s, "clock_set %"PRIi64"\n", val);
     return qtest_clock_rsp(s);
+}
+
+void qtest_device_reset(QTestState *s, const char *qom_path)
+{
+    qtest_sendf(s, "device_reset %s\n", qom_path);
+    qtest_rsp(s);
 }
 
 void qtest_irq_intercept_out(QTestState *s, const char *qom_path)
@@ -1254,6 +1266,13 @@ void qtest_writel(QTestState *s, uint64_t addr, uint32_t value)
     qtest_write(s, "writel", addr, value);
 }
 
+void qtest_writel_nonsecure(QTestState *s, uint64_t addr, uint32_t value)
+{
+    qtest_sendf(s, "writel 0x%" PRIx64 " 0x%" PRIx32 " nonsecure\n",
+                addr, value);
+    qtest_rsp(s);
+}
+
 void qtest_writeq(QTestState *s, uint64_t addr, uint64_t value)
 {
     qtest_write(s, "writeq", addr, value);
@@ -1287,6 +1306,20 @@ uint16_t qtest_readw(QTestState *s, uint64_t addr)
 uint32_t qtest_readl(QTestState *s, uint64_t addr)
 {
     return qtest_read(s, "readl", addr);
+}
+
+uint32_t qtest_readl_nonsecure(QTestState *s, uint64_t addr)
+{
+    gchar **args;
+    uint64_t value;
+    int ret;
+
+    qtest_sendf(s, "readl 0x%" PRIx64 " nonsecure\n", addr);
+    args = qtest_rsp_args(s, 2);
+    ret = qemu_strtou64(args[1], NULL, 0, &value);
+    g_assert(!ret);
+    g_strfreev(args);
+    return value;
 }
 
 uint64_t qtest_readq(QTestState *s, uint64_t addr)
