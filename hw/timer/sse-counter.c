@@ -171,6 +171,20 @@ static uint64_t sse_cntcv(SSECounter *s)
     return sse_counter_for_timestamp(s, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
 }
 
+void sse_counter_set_snapshot(SSECounter *s, uint64_t count, bool running)
+{
+    s->ticks_then = count;
+    s->ns_then = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    s->cntcr = deposit32(s->cntcr, R_CNTCR_EN_SHIFT,
+                         R_CNTCR_EN_LENGTH, running);
+    sse_counter_notify_users(s);
+}
+
+uint64_t sse_counter_value(SSECounter *s)
+{
+    return sse_cntcv(s);
+}
+
 static void sse_write_cntcv(SSECounter *s, uint32_t value, unsigned startbit)
 {
     /*

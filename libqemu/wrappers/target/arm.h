@@ -39,6 +39,11 @@ void libqemu_cpu_arm_set_exclusive_val(Object *cpu, uint64_t val);
 void libqemu_cpu_arm_set_power_state(Object *cpu, bool powered_on);
 int libqemu_cpu_arm_get_power_state(Object *cpu);
 int libqemu_cpu_arm_power_on_and_reset(Object *cpu);
+void libqemu_cpu_arm_set_gt_counter_mirror(
+    Object *cpu, bool active, bool running, uint64_t count,
+    uint32_t frequency_hz, uint64_t generation);
+uint64_t libqemu_cpu_arm_get_gt_counter_value(Object *cpu);
+uint64_t libqemu_cpu_arm_get_gt_counter_generation(Object *cpu);
 
 void libqemu_cpu_arm_post_init(Object *obj);
 void libqemu_cpu_arm_register_reset(Object *cpu);

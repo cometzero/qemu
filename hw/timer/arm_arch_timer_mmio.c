@@ -16,14 +16,47 @@
 
 static uint64_t arm_arch_timer_mmio_counter(ArmArchTimerMMIOState *s)
 {
-    return muldiv64(qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL), s->cntfrq,
+    int64_t now;
+
+    if (!s->mirror_active) {
+        return muldiv64(qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL), s->cntfrq,
+                        NANOSECONDS_PER_SECOND);
+    }
+    if (!s->mirror_running) {
+        return s->mirror_anchor_count;
+    }
+    now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    if (now <= s->mirror_anchor_ns) {
+        return s->mirror_anchor_count;
+    }
+    return s->mirror_anchor_count +
+           muldiv64(now - s->mirror_anchor_ns, s->mirror_frequency_hz,
                     NANOSECONDS_PER_SECOND);
 }
 
 static int64_t arm_arch_timer_mmio_counter_to_ns(ArmArchTimerMMIOState *s,
                                                  uint64_t count)
 {
-    return muldiv64(count, NANOSECONDS_PER_SECOND, s->cntfrq);
+    uint64_t available_ns;
+    uint64_t delta;
+    uint64_t delta_ns;
+
+    if (!s->mirror_active) {
+        return muldiv64(count, NANOSECONDS_PER_SECOND, s->cntfrq);
+    }
+    if (!s->mirror_running || s->mirror_anchor_ns < 0) {
+        return INT64_MAX;
+    }
+
+    delta = count - s->mirror_anchor_count;
+    available_ns = INT64_MAX - s->mirror_anchor_ns;
+    if (delta > muldiv64(available_ns, s->mirror_frequency_hz,
+                         NANOSECONDS_PER_SECOND)) {
+        return INT64_MAX;
+    }
+    delta_ns = muldiv64_round_up(delta, NANOSECONDS_PER_SECOND,
+                                 s->mirror_frequency_hz);
+    return s->mirror_anchor_ns + delta_ns;
 }
 
 static bool arm_arch_timer_mmio_frame_pending(ArmArchTimerMMIOState *s,
@@ -41,12 +74,58 @@ static void arm_arch_timer_mmio_update_frame(ArmArchTimerMMIOState *s,
     bool irq_level = pending &&
                      !(f->ctl & ARM_ARCH_TIMER_MMIO_CNTP_CTL_IMASK);
 
+    f->irq_level = irq_level;
     qemu_set_irq(f->irq, irq_level);
     timer_del(f->timer);
 
     if (!pending && (f->ctl & ARM_ARCH_TIMER_MMIO_CNTP_CTL_ENABLE)) {
         timer_mod(f->timer, arm_arch_timer_mmio_counter_to_ns(s, f->cval));
     }
+}
+
+void arm_arch_timer_mmio_set_counter_snapshot(
+    ArmArchTimerMMIOState *s, uint64_t count, bool running,
+    uint32_t frequency_hz)
+{
+    unsigned int i;
+
+    g_assert(frequency_hz != 0);
+    s->mirror_active = true;
+    s->mirror_running = running;
+    s->mirror_frequency_hz = frequency_hz;
+    s->mirror_anchor_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    s->mirror_anchor_count = count;
+
+    for (i = 0; i < s->nr_frames; i++) {
+        arm_arch_timer_mmio_update_frame(s, i);
+    }
+}
+
+uint64_t arm_arch_timer_mmio_get_counter_value(ArmArchTimerMMIOState *s)
+{
+    return arm_arch_timer_mmio_counter(s);
+}
+
+bool arm_arch_timer_mmio_get_frame_snapshot(
+    ArmArchTimerMMIOState *s, uint32_t frame,
+    ArmArchTimerMMIOFrameSnapshot *snapshot)
+{
+    ArmArchTimerMMIOFrame *timer;
+
+    if (frame >= s->nr_frames || snapshot == NULL) {
+        return false;
+    }
+    arm_arch_timer_mmio_update_frame(s, frame);
+    timer = &s->frame[frame];
+    snapshot->count = arm_arch_timer_mmio_counter(s);
+    snapshot->cval = timer->cval;
+    snapshot->cntfrq = s->cntfrq;
+    snapshot->ctl = timer->ctl;
+    if (arm_arch_timer_mmio_frame_pending(s, timer)) {
+        snapshot->ctl |= ARM_ARCH_TIMER_MMIO_CNTP_CTL_ISTAT;
+    }
+    snapshot->irq_level = timer->irq_level;
+    return true;
 }
 
 static void arm_arch_timer_mmio_tick(void *opaque)
@@ -341,6 +420,7 @@ static void arm_arch_timer_mmio_reset(DeviceState *dev)
         s->frame[i].cntpl0acr = 0;
         s->cntacr[i] = 0;
         timer_del(s->frame[i].timer);
+        s->frame[i].irq_level = false;
         qemu_set_irq(s->frame[i].irq, 0);
     }
 }

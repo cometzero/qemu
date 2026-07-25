@@ -1,4 +1,5 @@
-libqemu_ss.add(files('memory.c', 'cpu.c', 'iothread.c', 'gpio.c', 'timer.c',
+libqemu_ss.add(files('memory.c', 'cpu.c', 'iothread.c', 'clock.c',
+                     'gpio.c', 'timer.c',
                      'chardev.c', 'console.c', 'rcu.c', 'error.c', 'virgl.c',
 		     'qdev.c', 'gdbserver.c'))
 libqemu_ss.add(sdl)
@@ -9,4 +10,5 @@ subdir('target')
 
 install_headers('gpio.h', 'timer.h', 'memory.h', 'cpu.h', 'display.h',
                 'console.h', 'libqemu.h', 'error.h', 'virgl.h', 'gdbserver.h',
+                'clock.h',
                 subdir : 'libqemu/libqemu/wrappers')

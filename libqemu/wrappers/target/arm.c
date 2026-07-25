@@ -22,6 +22,7 @@
 #include "target/arm/cpu.h"
 #include "target/arm/cpu-qom.h"
 #include "target/arm/cpregs.h"
+#include "target/arm/internals.h"
 #include "target/arm/arm-powerctl.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/intc/armv7m_nvic.h"
@@ -169,6 +170,26 @@ int libqemu_cpu_arm_power_on_and_reset(Object *obj)
     ARMCPU *cpu = ARM_CPU(obj);
 
     return arm_set_cpu_on_and_reset(arm_cpu_mp_affinity(cpu));
+}
+
+void libqemu_cpu_arm_set_gt_counter_mirror(
+    Object *obj, bool active, bool running, uint64_t count,
+    uint32_t frequency_hz, uint64_t generation)
+{
+    arm_gt_counter_mirror_set(ARM_CPU(obj), active, running, count,
+                              frequency_hz, generation);
+}
+
+uint64_t libqemu_cpu_arm_get_gt_counter_value(Object *obj)
+{
+    ARMCPU *cpu = ARM_CPU(obj);
+
+    return gt_get_countervalue(&cpu->env);
+}
+
+uint64_t libqemu_cpu_arm_get_gt_counter_generation(Object *obj)
+{
+    return arm_gt_counter_mirror_generation(ARM_CPU(obj));
 }
 
 /*

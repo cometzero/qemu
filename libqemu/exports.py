@@ -374,9 +374,42 @@ ExportedType('QemuTimer', 'QEMUTimer')
 ExportedFct('clock_virtual_get_ns', 'int64_t', [ ], priv = 'libqemu_clock_virtual_get_ns')
 ExportedFct('timer_new_virtual_ns', 'QemuTimer *', [ 'LibQemuTimerCb', 'void *' ],
         priv = 'libqemu_timer_new_virtual_ns')
+ExportedFct('sse_counter_set_snapshot', 'void',
+        [ 'Object *', 'uint64_t', 'bool' ],
+        priv = 'libqemu_sse_counter_set_snapshot', iothread_locked = True)
+ExportedFct('sse_counter_get_value', 'uint64_t', [ 'Object *' ],
+        priv = 'libqemu_sse_counter_get_value', iothread_locked = True)
+ExportedFct('arm_arch_timer_mmio_set_snapshot', 'void',
+        [ 'Object *', 'uint64_t', 'bool', 'uint32_t' ],
+        priv = 'libqemu_arm_arch_timer_mmio_set_snapshot',
+        iothread_locked = True)
+ExportedFct('arm_arch_timer_mmio_get_value', 'uint64_t', [ 'Object *' ],
+        priv = 'libqemu_arm_arch_timer_mmio_get_value',
+        iothread_locked = True)
+ExportedFct('arm_arch_timer_mmio_get_frame_snapshot', 'bool',
+        [ 'Object *', 'uint32_t',
+          'LibQemuArmArchTimerMMIOFrameSnapshot *' ],
+        priv = 'libqemu_arm_arch_timer_mmio_get_frame_snapshot',
+        iothread_locked = True)
+ExportedFct('sse_timer_get_snapshot', 'bool',
+        [ 'Object *', 'Object *', 'LibQemuArmSSETimerSnapshot *' ],
+        priv = 'libqemu_sse_timer_get_snapshot',
+        iothread_locked = True)
 ExportedFct('timer_free', 'void', [ 'QemuTimer *' ])
 ExportedFct('timer_mod_ns', 'void', [ 'QemuTimer *', 'int64_t' ])
 ExportedFct('timer_del', 'void', [ 'QemuTimer *' ])
+
+PrivateInclude('libqemu/wrappers/clock.h')
+ExportedType('QemuClock', 'Clock')
+ExportedFct('clock_new', 'Clock *', ['Object *', 'const char *'],
+        priv = 'libqemu_clock_new', on_iothread = True)
+ExportedFct('clock_update_hz', 'bool', ['Clock *', 'uint64_t'],
+        priv = 'libqemu_clock_update_hz', on_iothread = True)
+ExportedFct('qdev_connect_clock_in', 'void',
+        ['DeviceState *', 'const char *', 'Clock *'],
+        priv = 'libqemu_qdev_connect_clock_in', on_iothread = True)
+ExportedFct('device_cold_reset', 'void', ['DeviceState *'],
+        priv = 'libqemu_device_cold_reset', iothread_locked = True)
 
 PrivateInclude('system/ram_addr.h')
 PrivateInclude('exec/translation-block.h')
@@ -451,6 +484,14 @@ ExportedFct('cpu_arm_get_power_state', 'int', [ 'Object *' ],
         priv = 'libqemu_cpu_arm_get_power_state', arch = 'aarch64')
 ExportedFct('cpu_arm_power_on_and_reset', 'int', [ 'Object *' ],
         priv = 'libqemu_cpu_arm_power_on_and_reset', arch = 'aarch64')
+ExportedFct('cpu_arm_set_gt_counter_mirror', 'void',
+        [ 'Object *', 'bool', 'bool', 'uint64_t', 'uint32_t', 'uint64_t' ],
+        priv = 'libqemu_cpu_arm_set_gt_counter_mirror', arch = 'aarch64')
+ExportedFct('cpu_arm_get_gt_counter_value', 'uint64_t', [ 'Object *' ],
+        priv = 'libqemu_cpu_arm_get_gt_counter_value', arch = 'aarch64')
+ExportedFct('cpu_arm_get_gt_counter_generation', 'uint64_t', [ 'Object *' ],
+        priv = 'libqemu_cpu_arm_get_gt_counter_generation',
+        arch = 'aarch64')
 ExportedFct('cpu_arm_post_init', 'void', [ 'Object *' ],
         priv = 'libqemu_cpu_arm_post_init', arch = 'aarch64')
 ExportedFct('cpu_arm_register_reset', 'void', [ 'Object *' ],

@@ -19,6 +19,9 @@
 
 #include "qemu/osdep.h"
 #include "qemu/timer.h"
+#include "hw/timer/arm_arch_timer_mmio.h"
+#include "hw/timer/sse-counter.h"
+#include "hw/timer/sse-timer.h"
 
 #include "timer.h"
 
@@ -31,4 +34,65 @@ QemuTimer *libqemu_timer_new_virtual_ns(LibQemuTimerCb cb, void *opaque)
 {
     QemuTimer *ret = (QemuTimer *) timer_new_ns(QEMU_CLOCK_VIRTUAL, cb, opaque);
     return ret;
+}
+
+void libqemu_sse_counter_set_snapshot(Object *obj, uint64_t count,
+                                      bool running)
+{
+    sse_counter_set_snapshot(SSE_COUNTER(obj), count, running);
+}
+
+uint64_t libqemu_sse_counter_get_value(Object *obj)
+{
+    return sse_counter_value(SSE_COUNTER(obj));
+}
+
+void libqemu_arm_arch_timer_mmio_set_snapshot(
+    Object *obj, uint64_t count, bool running, uint32_t frequency_hz)
+{
+    arm_arch_timer_mmio_set_counter_snapshot(
+        ARM_ARCH_TIMER_MMIO(obj), count, running, frequency_hz);
+}
+
+uint64_t libqemu_arm_arch_timer_mmio_get_value(Object *obj)
+{
+    return arm_arch_timer_mmio_get_counter_value(
+        ARM_ARCH_TIMER_MMIO(obj));
+}
+
+bool libqemu_arm_arch_timer_mmio_get_frame_snapshot(
+    Object *obj, uint32_t frame,
+    LibQemuArmArchTimerMMIOFrameSnapshot *snapshot)
+{
+    ArmArchTimerMMIOFrameSnapshot internal;
+
+    if (snapshot == NULL ||
+        !arm_arch_timer_mmio_get_frame_snapshot(
+            ARM_ARCH_TIMER_MMIO(obj), frame, &internal)) {
+        return false;
+    }
+    snapshot->count = internal.count;
+    snapshot->cval = internal.cval;
+    snapshot->cntfrq = internal.cntfrq;
+    snapshot->ctl = internal.ctl;
+    snapshot->irq_level = internal.irq_level;
+    return true;
+}
+
+bool libqemu_sse_timer_get_snapshot(
+    Object *counter, Object *timer, LibQemuArmSSETimerSnapshot *snapshot)
+{
+    ArmSSETimerSnapshot internal;
+
+    if (snapshot == NULL ||
+        !sse_timer_get_snapshot(SSE_COUNTER(counter), SSE_TIMER(timer),
+                                &internal)) {
+        return false;
+    }
+    snapshot->count = internal.count;
+    snapshot->cval = internal.cval;
+    snapshot->counter_frequency_hz = internal.counter_frequency_hz;
+    snapshot->cntfrq = internal.cntfrq;
+    snapshot->ctl = internal.ctl;
+    return true;
 }

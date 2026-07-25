@@ -37,6 +37,7 @@
 #include "qemu/plugin.h"
 
 static void switch_mode(CPUARMState *env, int mode);
+static void gt_recalc_timer(ARMCPU *cpu, int timeridx);
 
 int compare_u64(const void *a, const void *b)
 {
@@ -1348,8 +1349,81 @@ static CPAccessResult gt_sel2timer_access(CPUARMState *env,
 uint64_t gt_get_countervalue(CPUARMState *env)
 {
     ARMCPU *cpu = env_archcpu(env);
+    int64_t now;
+    uint64_t elapsed;
 
-    return qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) / gt_cntfrq_period_ns(cpu);
+    if (!cpu->gt_counter_mirror.active) {
+        return qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) /
+               gt_cntfrq_period_ns(cpu);
+    }
+
+    if (!cpu->gt_counter_mirror.running) {
+        return cpu->gt_counter_mirror.anchor_count;
+    }
+
+    now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    if (now <= cpu->gt_counter_mirror.anchor_ns) {
+        return cpu->gt_counter_mirror.anchor_count;
+    }
+
+    elapsed = now - cpu->gt_counter_mirror.anchor_ns;
+    return cpu->gt_counter_mirror.anchor_count +
+           muldiv64(elapsed, cpu->gt_counter_mirror.frequency_hz,
+                    NANOSECONDS_PER_SECOND);
+}
+
+bool gt_counter_mirror_active(const ARMCPU *cpu)
+{
+    return cpu->gt_counter_mirror.active;
+}
+
+int64_t gt_counter_mirror_deadline_ns(ARMCPU *cpu, uint64_t nexttick)
+{
+    uint64_t available_ns;
+    uint64_t delta;
+    uint64_t delta_ns;
+
+    if (!cpu->gt_counter_mirror.running ||
+        cpu->gt_counter_mirror.anchor_ns < 0) {
+        return INT64_MAX;
+    }
+
+    delta = nexttick - cpu->gt_counter_mirror.anchor_count;
+    available_ns = INT64_MAX - cpu->gt_counter_mirror.anchor_ns;
+    if (delta > muldiv64(available_ns,
+                         cpu->gt_counter_mirror.frequency_hz,
+                         NANOSECONDS_PER_SECOND)) {
+        return INT64_MAX;
+    }
+    delta_ns = muldiv64_round_up(delta, NANOSECONDS_PER_SECOND,
+                                 cpu->gt_counter_mirror.frequency_hz);
+    return cpu->gt_counter_mirror.anchor_ns + delta_ns;
+}
+
+void arm_gt_counter_mirror_set(ARMCPU *cpu, bool active, bool running,
+                               uint64_t count, uint32_t frequency_hz,
+                               uint64_t generation)
+{
+    int i;
+
+    g_assert(!active || frequency_hz != 0);
+
+    cpu->gt_counter_mirror.active = active;
+    cpu->gt_counter_mirror.running = running;
+    cpu->gt_counter_mirror.frequency_hz = frequency_hz;
+    cpu->gt_counter_mirror.anchor_ns =
+        qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    cpu->gt_counter_mirror.anchor_count = count;
+    cpu->gt_counter_mirror.generation = generation;
+
+    for (i = 0; i < NUM_GTIMERS; i++) {
+        gt_recalc_timer(cpu, i);
+    }
+}
+
+uint64_t arm_gt_counter_mirror_generation(const ARMCPU *cpu)
+{
+    return cpu->gt_counter_mirror.generation;
 }
 
 static void gt_update_irq(ARMCPU *cpu, int timeridx)
@@ -1519,7 +1593,10 @@ static void gt_recalc_timer(ARMCPU *cpu, int timeridx)
          * set the timer for as far in the future as possible. When the
          * timer expires we will reset the timer for any remaining period.
          */
-        if (nexttick > INT64_MAX / gt_cntfrq_period_ns(cpu)) {
+        if (gt_counter_mirror_active(cpu)) {
+            timer_mod_ns(cpu->gt_timer[timeridx],
+                         gt_counter_mirror_deadline_ns(cpu, nexttick));
+        } else if (nexttick > INT64_MAX / gt_cntfrq_period_ns(cpu)) {
             timer_mod_ns(cpu->gt_timer[timeridx], INT64_MAX);
         } else {
             timer_mod(cpu->gt_timer[timeridx], nexttick);

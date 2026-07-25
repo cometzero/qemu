@@ -454,7 +454,10 @@ void HELPER(wfit)(CPUARMState *env, uint64_t timeout)
     if (uadd64_overflow(timeout, offset, &nexttick)) {
         nexttick = UINT64_MAX;
     }
-    if (nexttick > INT64_MAX / gt_cntfrq_period_ns(cpu)) {
+    if (gt_counter_mirror_active(cpu)) {
+        timer_mod_ns(cpu->wfxt_timer,
+                     gt_counter_mirror_deadline_ns(cpu, nexttick));
+    } else if (nexttick > INT64_MAX / gt_cntfrq_period_ns(cpu)) {
         /*
          * If the timeout is too long for the signed 64-bit range
          * of a QEMUTimer, let it expire early.

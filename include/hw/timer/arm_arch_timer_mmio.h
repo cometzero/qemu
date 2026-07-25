@@ -38,7 +38,16 @@ typedef struct ArmArchTimerMMIOFrame {
     uint32_t cntpl0acr;
     qemu_irq irq;
     QEMUTimer *timer;
+    bool irq_level;
 } ArmArchTimerMMIOFrame;
+
+typedef struct ArmArchTimerMMIOFrameSnapshot {
+    uint64_t count;
+    uint64_t cval;
+    uint32_t cntfrq;
+    uint32_t ctl;
+    uint32_t irq_level;
+} ArmArchTimerMMIOFrameSnapshot;
 
 struct ArmArchTimerMMIOState {
     SysBusDevice parent_obj;
@@ -51,6 +60,19 @@ struct ArmArchTimerMMIOState {
     uint32_t frame_id[ARM_ARCH_TIMER_MMIO_MAX_FRAMES];
     uint32_t cntacr[ARM_ARCH_TIMER_MMIO_MAX_FRAMES];
     ArmArchTimerMMIOFrame frame[ARM_ARCH_TIMER_MMIO_MAX_FRAMES];
+    bool mirror_active;
+    bool mirror_running;
+    uint32_t mirror_frequency_hz;
+    int64_t mirror_anchor_ns;
+    uint64_t mirror_anchor_count;
 };
+
+void arm_arch_timer_mmio_set_counter_snapshot(
+    ArmArchTimerMMIOState *s, uint64_t count, bool running,
+    uint32_t frequency_hz);
+uint64_t arm_arch_timer_mmio_get_counter_value(ArmArchTimerMMIOState *s);
+bool arm_arch_timer_mmio_get_frame_snapshot(
+    ArmArchTimerMMIOState *s, uint32_t frame,
+    ArmArchTimerMMIOFrameSnapshot *snapshot);
 
 #endif

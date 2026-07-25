@@ -87,6 +87,8 @@ static const int timer_id[] = {
     0x0d, 0xf0, 0x05, 0xb1, /* CID0..CID3 */
 };
 
+static bool sse_timer_status(SSETimer *s);
+
 static bool sse_is_autoinc(SSETimer *s)
 {
     return (s->cntp_aival_ctl & R_CNTP_AIVAL_CTL_EN_MASK) != 0;
@@ -102,6 +104,24 @@ static uint64_t sse_cntpct(SSETimer *s)
     /* Return the CNTPCT value for the current time */
     return sse_counter_for_timestamp(s->counter,
                                      qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
+}
+
+bool sse_timer_get_snapshot(SSECounter *counter, SSETimer *timer,
+                            ArmSSETimerSnapshot *snapshot)
+{
+    if (counter == NULL || timer == NULL || snapshot == NULL ||
+        timer->counter != counter) {
+        return false;
+    }
+    snapshot->count = sse_cntpct(timer);
+    snapshot->cval = timer->cntp_cval;
+    snapshot->counter_frequency_hz = clock_get_hz(counter->clk);
+    snapshot->cntfrq = timer->cntfrq;
+    snapshot->ctl = timer->cntp_ctl;
+    if (sse_timer_status(timer)) {
+        snapshot->ctl |= R_CNTP_CTL_ISTATUS_MASK;
+    }
+    return true;
 }
 
 static bool sse_timer_status(SSETimer *s)

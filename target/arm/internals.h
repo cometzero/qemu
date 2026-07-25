@@ -1889,6 +1889,8 @@ int delete_hw_watchpoint(vaddr addr, vaddr len, int type);
 
 /* Return the current value of the system counter in ticks */
 uint64_t gt_get_countervalue(CPUARMState *env);
+bool gt_counter_mirror_active(const ARMCPU *cpu);
+int64_t gt_counter_mirror_deadline_ns(ARMCPU *cpu, uint64_t nexttick);
 /*
  * Return the currently applicable offset between the system counter
  * and the counter for the specified timer, as used for direct register

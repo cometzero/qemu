@@ -1180,6 +1180,23 @@ struct ArchCPU {
 
     /* Generic timer counter frequency, in Hz */
     uint64_t gt_cntfrq_hz;
+
+    /*
+     * Optional local mirror of an external architectural counter.
+     *
+     * The mirror is deliberately self-contained in QEMU: generic-timer
+     * reads and deadline calculations must never call back into a board
+     * model.  The board may replace this affine snapshot at quiescent
+     * synchronization points.
+     */
+    struct {
+        bool active;
+        bool running;
+        uint32_t frequency_hz;
+        int64_t anchor_ns;
+        uint64_t anchor_count;
+        uint64_t generation;
+    } gt_counter_mirror;
 };
 
 typedef struct ARMCPUInfo {
@@ -1226,6 +1243,10 @@ void arm_gt_sel2timer_cb(void *opaque);
 void arm_gt_sel2vtimer_cb(void *opaque);
 
 unsigned int gt_cntfrq_period_ns(ARMCPU *cpu);
+void arm_gt_counter_mirror_set(ARMCPU *cpu, bool active, bool running,
+                               uint64_t count, uint32_t frequency_hz,
+                               uint64_t generation);
+uint64_t arm_gt_counter_mirror_generation(const ARMCPU *cpu);
 void gt_rme_post_el_change(ARMCPU *cpu, void *opaque);
 
 #define ARM_AFF0_SHIFT 0

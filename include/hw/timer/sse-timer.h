@@ -32,6 +32,14 @@
 #define TYPE_SSE_TIMER "sse-timer"
 OBJECT_DECLARE_SIMPLE_TYPE(SSETimer, SSE_TIMER)
 
+typedef struct ArmSSETimerSnapshot {
+    uint64_t count;
+    uint64_t cval;
+    uint64_t counter_frequency_hz;
+    uint32_t cntfrq;
+    uint32_t ctl;
+} ArmSSETimerSnapshot;
+
 struct SSETimer {
     /*< private >*/
     SysBusDevice parent_obj;
@@ -50,5 +58,8 @@ struct SSETimer {
     uint32_t cntp_aival_ctl;
     uint32_t cntp_aival_reload;
 };
+
+bool sse_timer_get_snapshot(SSECounter *counter, SSETimer *timer,
+                            ArmSSETimerSnapshot *snapshot);
 
 #endif
