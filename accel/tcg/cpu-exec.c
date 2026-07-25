@@ -46,7 +46,9 @@
 #include "tb-context.h"
 #include "tb-internal.h"
 #include "internal-common.h"
+#ifdef CONFIG_LIBQEMU
 #include "libqemu/callbacks.h"
+#endif
 
 /* -icount align implementation. */
 
@@ -958,6 +960,7 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
                 cpu->cflags_next_tb = -1;
             }
 
+#ifdef CONFIG_LIBQEMU
             if (libqemu_cpu_pc_entry_watch_same_page(s.pc, TARGET_PAGE_MASK)) {
                 s.cflags = (s.cflags & ~CF_COUNT_MASK) |
                            CF_NO_GOTO_TB | CF_BP_PAGE | 1;
@@ -973,6 +976,7 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
                 last_tb = NULL;
                 continue;
             }
+#endif
 
             if (check_for_breakpoints(cpu, s.pc, &s.cflags)) {
                 break;
