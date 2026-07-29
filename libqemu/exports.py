@@ -366,8 +366,11 @@ ExportedFct('gdbserver_start', 'void', ['const char *'], priv = 'libqemu_gdbserv
 ExportedFct('libqemu_set_autostart', 'void', ['int'])
 
 PrivateInclude('system/runstate.h')
-ExportedFct('vm_start', 'void', [])
-ExportedFct('vm_stop_paused', 'void', [], priv = 'libqemu_vm_stop_paused')
+ExportedFct('vm_start', 'void', [], on_iothread = True)
+ExportedFct('vm_stop_paused', 'void', [], priv = 'libqemu_vm_stop_paused',
+        on_iothread = True)
+ExportedFct('vm_is_running', 'bool', [], priv = 'libqemu_vm_is_running',
+        on_iothread = True)
 
 PublicInclude('libqemu/wrappers/timer.h')
 ExportedType('QemuTimer', 'QEMUTimer')
@@ -432,6 +435,8 @@ ExportedFct('clear_cpu_pc_entry_watches', 'void', [],
         priv = 'libqemu_clear_cpu_pc_entry_watches')
 ExportedFct('set_cpu_kick_cb', 'void', [ 'LibQemuCpuKickFn', 'void *' ],
         priv = 'libqemu_set_cpu_kick_cb')
+ExportedFct('set_vm_state_cb', 'void', [ 'LibQemuVmStateFn', 'void *' ],
+        priv = 'libqemu_set_vm_state_cb', on_iothread = True)
 ExportedFct('set_iommu_translate_cb', 'void',
         [ 'LibQemuIOMMUTranslateFn', 'void *' ],
         priv = 'libqemu_set_iommu_translate_cb')

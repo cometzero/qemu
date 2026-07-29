@@ -48,6 +48,7 @@ uintptr_t libqemu_cpu_get_pc(Object *cpu);
 uintptr_t libqemu_cpu_get_mem_io_pc(Object *cpu);
 
 void libqemu_vm_stop_paused(void);
+bool libqemu_vm_is_running(void);
 
 void libqemu_cpu_set_vcpu_dirty(Object *obj, bool dirty);
 

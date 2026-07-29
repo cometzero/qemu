@@ -295,6 +295,11 @@ void libqemu_vm_stop_paused(void)
     vm_stop(RUN_STATE_PAUSED);
 }
 
+bool libqemu_vm_is_running(void)
+{
+    return runstate_is_running();
+}
+
 void libqemu_cpu_set_vcpu_dirty(Object *obj, bool dirty)
 {
     CPU(obj)->vcpu_dirty = dirty;

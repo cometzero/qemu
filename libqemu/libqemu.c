@@ -21,6 +21,7 @@
 #include "qemu/main-loop.h"
 #include "qemu/rcu.h"
 #include "qemu/thread.h"
+#include "system/runstate.h"
 #include "system/system.h"
 #include "tcg/tcg.h"
 
@@ -66,6 +67,12 @@ struct LibQemuContext {
         LibQemuCpuKickFn cb;
         void *opaque;
     } cpu_kick_cb;
+
+    struct {
+        LibQemuVmStateFn cb;
+        void *opaque;
+        VMChangeStateEntry *entry;
+    } vm_state_cb;
 
     struct {
         LibQemuIOMMUTranslateFn cb;
@@ -185,6 +192,34 @@ void libqemu_set_cpu_pc_entry_cb(LibQemuCpuPcEntryFn cb, void *opaque)
 {
     context.cpu_pc_entry_cb.cb = cb;
     context.cpu_pc_entry_cb.opaque = opaque;
+}
+
+static void libqemu_vm_state_changed(void *opaque, bool running,
+                                     RunState state)
+{
+    LibQemuContext *context = opaque;
+
+    if (context->vm_state_cb.cb == NULL) {
+        return;
+    }
+    if (running || state == RUN_STATE_DEBUG || state == RUN_STATE_PAUSED) {
+        context->vm_state_cb.cb(running, context->vm_state_cb.opaque);
+    }
+}
+
+void libqemu_set_vm_state_cb(LibQemuVmStateFn cb, void *opaque)
+{
+    context.vm_state_cb.cb = cb;
+    context.vm_state_cb.opaque = opaque;
+
+    if (cb != NULL && context.vm_state_cb.entry == NULL) {
+        context.vm_state_cb.entry =
+            qemu_add_vm_change_state_handler(libqemu_vm_state_changed,
+                                             &context);
+    } else if (cb == NULL && context.vm_state_cb.entry != NULL) {
+        qemu_del_vm_change_state_handler(context.vm_state_cb.entry);
+        context.vm_state_cb.entry = NULL;
+    }
 }
 
 void libqemu_add_cpu_pc_entry_watch(uint64_t pc)
