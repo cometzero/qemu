@@ -4,6 +4,7 @@ system_ss.add(when: 'CONFIG_ARM_GIC', if_true: files(
   'arm_gic_common.c',
   'arm_gicv2m.c',
   'arm_gicv3_common.c',
+  'arm_gicv3_ext_range.c',
   'arm_gicv3_its_common.c',
 ))
 system_ss.add(when: 'CONFIG_ARM_GICV3', if_true: files(

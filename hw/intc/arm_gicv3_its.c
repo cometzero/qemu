@@ -63,9 +63,13 @@ typedef struct ITEntry {
 
 typedef struct VTEntry {
     bool valid;
+    bool alloc;
+    bool ptz;
     unsigned vptsize;
     uint32_t rdbase;
+    uint32_t default_doorbell;
     uint64_t vptaddr;
+    uint64_t vconfaddr;
 } VTEntry;
 
 /*
@@ -331,6 +335,7 @@ static MemTxResult get_vte(GICv3ITSState *s, uint32_t vpeid, VTEntry *vte)
     MemTxResult res = MEMTX_OK;
     AddressSpace *as = &s->gicv3->dma_as;
     uint64_t entry_addr = table_entry_addr(s, &s->vpet, vpeid, &res);
+    uint8_t entry[GITS_VPE_4_1_SIZE];
     uint64_t vteval;
 
     if (entry_addr == -1) {
@@ -338,6 +343,25 @@ static MemTxResult get_vte(GICv3ITSState *s, uint32_t vpeid, VTEntry *vte)
         vte->valid = false;
         trace_gicv3_its_vte_read_fault(vpeid);
         return MEMTX_OK;
+    }
+    if (s->gicv4_1) {
+        res = address_space_read(as, entry_addr, MEMTXATTRS_UNSPECIFIED,
+                                 entry, sizeof(entry));
+        if (res != MEMTX_OK) {
+            trace_gicv3_its_vte_read_fault(vpeid);
+            return res;
+        }
+        vteval = ldq_le_p(entry);
+        vte->valid = FIELD_EX64(vteval, VTE_4_1_0, VALID);
+        vte->alloc = FIELD_EX64(vteval, VTE_4_1_0, ALLOC);
+        vte->ptz = FIELD_EX64(vteval, VTE_4_1_0, PTZ);
+        vte->vptsize = FIELD_EX64(vteval, VTE_4_1_0, VPTSIZE);
+        vte->rdbase = FIELD_EX64(vteval, VTE_4_1_0, RDBASE);
+        vte->vptaddr = ldq_le_p(entry + 8);
+        vte->vconfaddr = ldq_le_p(entry + 16);
+        vte->default_doorbell =
+            FIELD_EX64(ldq_le_p(entry + 24), VTE_4_1_3, DEFAULT_DOORBELL);
+        goto out;
     }
     vteval = address_space_ldq_le(as, entry_addr, MEMTXATTRS_UNSPECIFIED, &res);
     if (res != MEMTX_OK) {
@@ -348,6 +372,7 @@ static MemTxResult get_vte(GICv3ITSState *s, uint32_t vpeid, VTEntry *vte)
     vte->vptsize = FIELD_EX64(vteval, VTE, VPTSIZE);
     vte->vptaddr = FIELD_EX64(vteval, VTE, VPTADDR);
     vte->rdbase = FIELD_EX64(vteval, VTE, RDBASE);
+out:
     trace_gicv3_its_vte_read(vpeid, vte->valid, vte->vptsize,
                              vte->vptaddr, vte->rdbase);
     return res;
@@ -487,6 +512,8 @@ static ItsCmdResult process_its_cmd_virt(GICv3ITSState *s, const ITEntry *ite,
 {
     VTEntry vte = {};
     ItsCmdResult cmdres;
+    uint32_t doorbell;
+    uint64_t vconfaddr;
 
     cmdres = lookup_vte(s, __func__, ite->vpeid, &vte);
     if (cmdres != CMD_CONTINUE_OK) {
@@ -500,12 +527,15 @@ static ItsCmdResult process_its_cmd_virt(GICv3ITSState *s, const ITEntry *ite,
         return CMD_CONTINUE;
     }
 
-    /*
-     * For QEMU the actual pending of the vLPI is handled in the
-     * redistributor code
-     */
+    doorbell = ite->doorbell;
+    if (s->gicv4_1 && doorbell == INTID_SPURIOUS) {
+        doorbell = vte.default_doorbell;
+    }
+    vconfaddr = s->gicv4_1 ? vte.vconfaddr : 0;
+
     gicv3_redist_process_vlpi(&s->gicv3->cpu[vte.rdbase], ite->intid,
-                              vte.vptaddr << 16, ite->doorbell, irqlevel);
+                              s->gicv4_1 ? vte.vptaddr : vte.vptaddr << 16,
+                              vconfaddr, ite->vpeid, doorbell, irqlevel);
     return CMD_CONTINUE_OK;
 }
 
@@ -659,6 +689,8 @@ static ItsCmdResult process_vmapti(GICv3ITSState *s, const uint64_t *cmdpkt,
     uint32_t num_eventids;
     DTEntry dte = {};
     ITEntry ite = {};
+    VTEntry vte = {};
+    ItsCmdResult cmdres;
 
     if (!its_feature_virtual(s)) {
         return CMD_CONTINUE;
@@ -720,6 +752,12 @@ static ItsCmdResult process_vmapti(GICv3ITSState *s, const uint64_t *cmdpkt,
                       "%s: VPEID 0x%x out of range (must be less than 0x%x)\n",
                       __func__, vpeid, s->vpet.num_entries);
         return CMD_CONTINUE;
+    }
+    if (s->gicv4_1) {
+        cmdres = lookup_vte(s, __func__, vpeid, &vte);
+        if (cmdres != CMD_CONTINUE_OK) {
+            return cmdres;
+        }
     }
     /* add ite entry to interrupt translation table */
     ite.valid = true;
@@ -951,12 +989,25 @@ static bool update_vte(GICv3ITSState *s, uint32_t vpeid, const VTEntry *vte)
     AddressSpace *as = &s->gicv3->dma_as;
     uint64_t entry_addr;
     uint64_t vteval = 0;
+    uint8_t entry[GITS_VPE_4_1_SIZE] = {};
     MemTxResult res = MEMTX_OK;
 
     trace_gicv3_its_vte_write(vpeid, vte->valid, vte->vptsize, vte->vptaddr,
                               vte->rdbase);
 
-    if (vte->valid) {
+    if (vte->valid && s->gicv4_1) {
+        vteval = FIELD_DP64(vteval, VTE_4_1_0, VALID, 1);
+        vteval = FIELD_DP64(vteval, VTE_4_1_0, ALLOC, vte->alloc);
+        vteval = FIELD_DP64(vteval, VTE_4_1_0, PTZ, vte->ptz);
+        vteval = FIELD_DP64(vteval, VTE_4_1_0, VPTSIZE, vte->vptsize);
+        vteval = FIELD_DP64(vteval, VTE_4_1_0, RDBASE, vte->rdbase);
+        stq_le_p(entry, vteval);
+        stq_le_p(entry + 8, vte->vptaddr);
+        stq_le_p(entry + 16, vte->vconfaddr);
+        vteval = FIELD_DP64(0, VTE_4_1_3, DEFAULT_DOORBELL,
+                            vte->default_doorbell);
+        stq_le_p(entry + 24, vteval);
+    } else if (vte->valid) {
         vteval = FIELD_DP64(vteval, VTE, VALID, 1);
         vteval = FIELD_DP64(vteval, VTE, VPTSIZE, vte->vptsize);
         vteval = FIELD_DP64(vteval, VTE, VPTADDR, vte->vptaddr);
@@ -971,6 +1022,11 @@ static bool update_vte(GICv3ITSState *s, uint32_t vpeid, const VTEntry *vte)
         /* No L2 table for this index: discard write and continue */
         return true;
     }
+    if (s->gicv4_1) {
+        res = address_space_write(as, entry_addr, MEMTXATTRS_UNSPECIFIED,
+                                  entry, sizeof(entry));
+        return res == MEMTX_OK;
+    }
     address_space_stq_le(as, entry_addr, vteval, MEMTXATTRS_UNSPECIFIED, &res);
     return res == MEMTX_OK;
 }
@@ -978,6 +1034,8 @@ static bool update_vte(GICv3ITSState *s, uint32_t vpeid, const VTEntry *vte)
 static ItsCmdResult process_vmapp(GICv3ITSState *s, const uint64_t *cmdpkt)
 {
     VTEntry vte = {};
+    VTEntry old_vte = {};
+    MemTxResult res;
     uint32_t vpeid;
 
     if (!its_feature_virtual(s)) {
@@ -985,10 +1043,22 @@ static ItsCmdResult process_vmapp(GICv3ITSState *s, const uint64_t *cmdpkt)
     }
 
     vpeid = FIELD_EX64(cmdpkt[1], VMAPP_1, VPEID);
+    vte.alloc = FIELD_EX64(cmdpkt[0], VMAPP_0, ALLOC);
+    vte.ptz = FIELD_EX64(cmdpkt[0], VMAPP_0, PTZ);
+    vte.vconfaddr = FIELD_EX64(cmdpkt[0], VMAPP_0, VCONFADDR) << 16;
+    vte.default_doorbell = FIELD_EX64(cmdpkt[1], VMAPP_1, DEFAULT_DOORBELL);
     vte.rdbase = FIELD_EX64(cmdpkt[2], VMAPP_2, RDBASE);
     vte.valid = FIELD_EX64(cmdpkt[2], VMAPP_2, V);
     vte.vptsize = FIELD_EX64(cmdpkt[3], VMAPP_3, VPTSIZE);
     vte.vptaddr = FIELD_EX64(cmdpkt[3], VMAPP_3, VPTADDR);
+    if (s->gicv4_1) {
+        vte.vptaddr <<= 16;
+    } else if (vte.alloc || vte.ptz || vte.vconfaddr ||
+               vte.default_doorbell) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: GICv4.1 fields require has-gicv4-1\n", __func__);
+        return CMD_CONTINUE;
+    }
 
     trace_gicv3_its_cmd_vmapp(vpeid, vte.rdbase, vte.valid,
                               vte.vptaddr, vte.vptsize);
@@ -1018,12 +1088,53 @@ static ItsCmdResult process_vmapp(GICv3ITSState *s, const uint64_t *cmdpkt)
         return CMD_CONTINUE;
     }
 
+    if (s->gicv4_1) {
+        if (!vte.valid &&
+            (vte.rdbase || vte.vptsize || vte.vptaddr ||
+             vte.vconfaddr || vte.default_doorbell)) {
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "%s: invalid fields for an unmapped vPE\n",
+                          __func__);
+            return CMD_CONTINUE;
+        }
+        if (vte.valid && !valid_doorbell(vte.default_doorbell)) {
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "%s: invalid default doorbell 0x%x\n", __func__,
+                          vte.default_doorbell);
+            return CMD_CONTINUE;
+        }
+        res = get_vte(s, vpeid, &old_vte);
+        if (res != MEMTX_OK) {
+            return CMD_STALL;
+        }
+        if ((vte.valid && vte.alloc && old_vte.valid) ||
+            (vte.valid && !vte.alloc && !old_vte.valid) ||
+            (!vte.valid && !old_vte.valid)) {
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "%s: invalid Alloc state for VPEID 0x%x\n",
+                          __func__, vpeid);
+            return CMD_CONTINUE;
+        }
+        if (vte.valid && vte.alloc && vte.ptz && vte.vptsize < 2) {
+            return CMD_CONTINUE;
+        }
+        if (vte.valid && vte.alloc && vte.ptz &&
+            address_space_set(&s->gicv3->dma_as, vte.vptaddr, 0,
+                              1ULL << (vte.vptsize - 2),
+                              MEMTXATTRS_UNSPECIFIED) != MEMTX_OK) {
+            return CMD_STALL;
+        }
+    }
+
     return update_vte(s, vpeid, &vte) ? CMD_CONTINUE_OK : CMD_STALL;
 }
 
 typedef struct VmovpCallbackData {
     uint64_t rdbase;
     uint32_t vpeid;
+    uint32_t default_doorbell;
+    bool update;
+    bool update_doorbell;
     /*
      * Overall command result. If more than one callback finds an
      * error, STALL beats CONTINUE.
@@ -1059,7 +1170,13 @@ static void vmovp_callback(gpointer data, gpointer opaque)
         break;
     }
 
+    if (!cbdata->update) {
+        return;
+    }
     vte.rdbase = cbdata->rdbase;
+    if (cbdata->update_doorbell && s->gicv4_1) {
+        vte.default_doorbell = cbdata->default_doorbell;
+    }
     if (!update_vte(s, cbdata->vpeid, &vte)) {
         cbdata->result = CMD_STALL;
     }
@@ -1075,10 +1192,21 @@ static ItsCmdResult process_vmovp(GICv3ITSState *s, const uint64_t *cmdpkt)
 
     cbdata.vpeid = FIELD_EX64(cmdpkt[1], VMOVP_1, VPEID);
     cbdata.rdbase = FIELD_EX64(cmdpkt[2], VMOVP_2, RDBASE);
+    cbdata.update_doorbell = FIELD_EX64(cmdpkt[2], VMOVP_2, DB);
+    cbdata.default_doorbell =
+        FIELD_EX64(cmdpkt[3], VMOVP_3, DEFAULT_DOORBELL);
 
     trace_gicv3_its_cmd_vmovp(cbdata.vpeid, cbdata.rdbase);
 
     if (cbdata.rdbase >= s->gicv3->num_cpu) {
+        return CMD_CONTINUE;
+    }
+    if (!s->gicv4_1 &&
+        (cbdata.update_doorbell || cbdata.default_doorbell)) {
+        return CMD_CONTINUE;
+    }
+    if (cbdata.update_doorbell &&
+        !valid_doorbell(cbdata.default_doorbell)) {
         return CMD_CONTINUE;
     }
 
@@ -1089,13 +1217,19 @@ static ItsCmdResult process_vmovp(GICv3ITSState *s, const uint64_t *cmdpkt)
      * to all the ITSes connected to the same GIC.
      */
     cbdata.result = CMD_CONTINUE_OK;
+    cbdata.update = false;
+    gicv3_foreach_its(s->gicv3, vmovp_callback, &cbdata);
+    if (cbdata.result != CMD_CONTINUE_OK) {
+        return cbdata.result;
+    }
+    cbdata.update = true;
     gicv3_foreach_its(s->gicv3, vmovp_callback, &cbdata);
     return cbdata.result;
 }
 
 static ItsCmdResult process_vmovi(GICv3ITSState *s, const uint64_t *cmdpkt)
 {
-    uint32_t devid, eventid, vpeid, doorbell;
+    uint32_t devid, eventid, vpeid, old_vpeid, doorbell;
     bool doorbell_valid;
     DTEntry dte = {};
     ITEntry ite = {};
@@ -1135,6 +1269,7 @@ static ItsCmdResult process_vmovi(GICv3ITSState *s, const uint64_t *cmdpkt)
     if (cmdres != CMD_CONTINUE_OK) {
         return cmdres;
     }
+    old_vpeid = ite.vpeid;
     cmdres = lookup_vte(s, __func__, vpeid, &new_vte);
     if (cmdres != CMD_CONTINUE_OK) {
         return cmdres;
@@ -1161,9 +1296,12 @@ static ItsCmdResult process_vmovi(GICv3ITSState *s, const uint64_t *cmdpkt)
      */
     if (old_vte.vptaddr != new_vte.vptaddr) {
         gicv3_redist_mov_vlpi(&s->gicv3->cpu[old_vte.rdbase],
-                              old_vte.vptaddr << 16,
+                              s->gicv4_1 ? old_vte.vptaddr :
+                              old_vte.vptaddr << 16, old_vpeid,
                               &s->gicv3->cpu[new_vte.rdbase],
+                              s->gicv4_1 ? new_vte.vptaddr :
                               new_vte.vptaddr << 16,
+                              s->gicv4_1 ? new_vte.vconfaddr : 0, vpeid,
                               ite.intid,
                               ite.doorbell);
     }
@@ -1191,7 +1329,9 @@ static ItsCmdResult process_vinvall(GICv3ITSState *s, const uint64_t *cmdpkt)
         return cmdres;
     }
 
-    gicv3_redist_vinvall(&s->gicv3->cpu[vte.rdbase], vte.vptaddr << 16);
+    gicv3_redist_vinvall(&s->gicv3->cpu[vte.rdbase],
+                         s->gicv4_1 ? vte.vptaddr : vte.vptaddr << 16,
+                         vpeid);
     return CMD_CONTINUE_OK;
 }
 
@@ -1242,7 +1382,8 @@ static ItsCmdResult process_inv(GICv3ITSState *s, const uint64_t *cmdpkt)
             return CMD_CONTINUE;
         }
         gicv3_redist_inv_vlpi(&s->gicv3->cpu[vte.rdbase], ite.intid,
-                              vte.vptaddr << 16);
+                              s->gicv4_1 ? vte.vptaddr :
+                              vte.vptaddr << 16, ite.vpeid);
         break;
     default:
         g_assert_not_reached();
@@ -1936,8 +2077,10 @@ static void gicv3_arm_its_realize(DeviceState *dev, Error **errp)
     GICv3ITSState *s = ARM_GICV3_ITS_COMMON(dev);
     int i;
 
-    if (s->gicv4_1 && s->gicv3->revision < 4) {
-        error_setg(errp, "GICv4.1 ITS feature reporting requires GIC revision 4");
+    if (s->gicv4_1 &&
+        (s->gicv3->revision < 4 || !s->gicv3->gicv4_1)) {
+        error_setg(errp,
+                   "GICv4.1 ITS behavior requires a GICv4.1 parent");
         return;
     }
     if (s->gicv4_1_cte_size == 0 || s->gicv4_1_cte_size > 32) {
@@ -1946,6 +2089,13 @@ static void gicv3_arm_its_realize(DeviceState *dev, Error **errp)
     }
     if (s->gicv4_1_svpet > 3) {
         error_setg(errp, "gicv4-1-svpet must be in range 0..3");
+        return;
+    }
+    if (!s->gicv4_1 &&
+        (s->gicv4_1_svpet ||
+         s->gicv4_1_cte_size != GITS_CTE_SIZE)) {
+        error_setg(errp,
+                   "GICv4.1 ITS properties require has-gicv4-1");
         return;
     }
 
@@ -2021,7 +2171,8 @@ static void gicv3_its_reset_hold(Object *obj, ResetType type)
         s->baser[2] = FIELD_DP64(s->baser[2], GITS_BASER, PAGESIZE,
                                  GITS_BASER_PAGESIZE_64K);
         s->baser[2] = FIELD_DP64(s->baser[2], GITS_BASER, ENTRYSIZE,
-                                 GITS_VPE_SIZE - 1);
+                                 (s->gicv4_1 ? GITS_VPE_4_1_SIZE :
+                                  GITS_VPE_SIZE) - 1);
     }
 }
 

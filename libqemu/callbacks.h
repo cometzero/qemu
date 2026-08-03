@@ -26,6 +26,7 @@
 typedef struct CPUState CPUState;
 
 void libqemu_cpu_end_of_loop_cb(CPUState *cpu);
+bool libqemu_shutdown_requested(void);
 bool libqemu_cpu_pc_entry_cb_enabled(void);
 bool libqemu_cpu_pc_entry_cb(CPUState *cpu, uint64_t pc);
 bool libqemu_cpu_pc_entry_watches_enabled(void);

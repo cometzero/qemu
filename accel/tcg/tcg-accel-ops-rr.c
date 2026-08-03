@@ -114,6 +114,11 @@ static void rr_wait_io_event(void)
     CPUState *cpu;
 
     while (all_cpu_threads_idle()) {
+#ifdef CONFIG_LIBQEMU
+        if (!coroutine_tcg && libqemu_shutdown_requested()) {
+            return;
+        }
+#endif
         rr_stop_kick_timer();
         qemu_cond_wait_bql(first_cpu->halt_cond);
     }
@@ -223,6 +228,11 @@ static void *rr_cpu_thread_fn(void *arg)
     process_queued_cpu_work(cpu);
 
     while (1) {
+#ifdef CONFIG_LIBQEMU
+        if (!coroutine_tcg && libqemu_shutdown_requested()) {
+            break;
+        }
+#endif
         /* Only used for icount_enabled() */
         int64_t cpu_budget = 0;
 
@@ -332,7 +342,14 @@ static void *rr_cpu_thread_fn(void *arg)
         qatomic_set(&rr_current_cpu, NULL);
     }
 
-    g_assert_not_reached();
+    rr_stop_kick_timer();
+    CPU_FOREACH(cpu) {
+        tcg_cpu_destroy(cpu);
+    }
+    bql_unlock();
+    rcu_remove_force_rcu_notifier(&force_rcu);
+    rcu_unregister_thread();
+    return NULL;
 }
 
 static void rr_cpu_coroutine_fn(void *arg)

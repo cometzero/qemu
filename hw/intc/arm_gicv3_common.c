@@ -155,12 +155,14 @@ static bool gicv4_needed(void *opaque)
 
 const VMStateDescription vmstate_gicv3_gicv4 = {
     .name = "arm_gicv3_cpu/gicv4",
-    .version_id = 1,
+    .version_id = 3,
     .minimum_version_id = 1,
     .needed = gicv4_needed,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT64(gicr_vpropbaser, GICv3CPUState),
         VMSTATE_UINT64(gicr_vpendbaser, GICv3CPUState),
+        VMSTATE_UINT64_V(gicr_vpend_vptaddr, GICv3CPUState, 2),
+        VMSTATE_UINT64_V(gicr_vpend_vconfaddr, GICv3CPUState, 3),
         VMSTATE_END_OF_LIST()
     }
 };
@@ -223,6 +225,8 @@ static const VMStateDescription vmstate_gicv3_cpu = {
 static int gicv3_pre_load(void *opaque)
 {
     GICv3State *cs = opaque;
+
+    gicv3_ext_range_reset(cs);
 
    /*
     * The gicd_no_migration_shift_bug flag is used for migration compatibility
@@ -305,6 +309,8 @@ static const VMStateDescription vmstate_gicv3 = {
     .subsections = (const VMStateDescription * const []) {
         &vmstate_gicv3_gicd_no_migration_shift_bug,
         &vmstate_gicv3_gicd_nmi,
+        &vmstate_gicv3_espi,
+        &vmstate_gicv3_eppi,
         NULL
     }
 };
@@ -323,7 +329,7 @@ void gicv3_init_irqs_and_mmio(GICv3State *s, qemu_irq_handler handler,
      *  [N+32..N+63] PPIs for CPU 1
      *   ...
      */
-    i = s->num_irq - GIC_INTERNAL + GIC_INTERNAL * s->num_cpu;
+    g_assert(gicv3_gpio_count(s, &i));
     qdev_init_gpio_in(DEVICE(s), handler, i);
 
     for (i = 0; i < s->num_cpu; i++) {
@@ -384,10 +390,11 @@ static void arm_gicv3_common_realize(DeviceState *dev, Error **errp)
         return;
     }
 
-    if (s->num_irq > GICV3_MAXIRQ) {
+    if (s->num_irq >= GICV3_NORMAL_INTID_MAX) {
         error_setg(errp,
-                   "requested %u interrupt lines exceeds GIC maximum %d",
-                   s->num_irq, GICV3_MAXIRQ);
+                   "requested %u normal interrupt lines reaches reserved "
+                   "INTID range starting at %d",
+                   s->num_irq, GICV3_NORMAL_INTID_MAX);
         return;
     }
     if (s->num_irq < GIC_INTERNAL) {
@@ -400,6 +407,21 @@ static void arm_gicv3_common_realize(DeviceState *dev, Error **errp)
         error_setg(errp, "num-cpu must be at least 1");
         return;
     }
+    if (s->num_espi > GICV3_MAX_ESPI ||
+        (s->num_espi != 0 && s->num_espi % 32 != 0)) {
+        error_setg(errp, "num-espi must be zero or a multiple of 32 "
+                   "in range 32..%d", GICV3_MAX_ESPI);
+        return;
+    }
+    if (s->num_eppi != 0 && s->num_eppi != 32 &&
+        s->num_eppi != GICV3_MAX_EPPI) {
+        error_setg(errp, "num-eppi must be 0, 32, or %d", GICV3_MAX_EPPI);
+        return;
+    }
+    if (!gicv3_gpio_count(s, &i)) {
+        error_setg(errp, "GIC input GPIO count exceeds INT_MAX");
+        return;
+    }
     if (s->gicv4_1 && s->revision < 4) {
         error_setg(errp, "GICv4.1 feature reporting requires revision 4");
         return;
@@ -408,8 +430,12 @@ static void arm_gicv3_common_realize(DeviceState *dev, Error **errp)
         error_setg(errp, "GICv4.1 sub-features require has-gicv4-1");
         return;
     }
-    if (s->rvpeid && (s->vpeid_bits == 0 || s->vpeid_bits > 32)) {
-        error_setg(errp, "vpeid-bits must be in range 1..32");
+    if (s->direct_lpi && !s->lpi_enable) {
+        error_setg(errp, "DirectLPI requires has-lpi");
+        return;
+    }
+    if (s->rvpeid && (s->vpeid_bits == 0 || s->vpeid_bits > 16)) {
+        error_setg(errp, "vpeid-bits must be in range 1..16");
         return;
     }
 
@@ -465,8 +491,7 @@ static void arm_gicv3_common_realize(DeviceState *dev, Error **errp)
          *  DPGS == 0 (GICR_CTLR.DPG* not supported)
          *  Last == 1 if this is the last redistributor in a series of
          *            contiguous redistributor pages
-         *  DirectLPI, Dirty and RVPEID are Apollo opt-in feature-reporting
-         *  bits used to match GIC-720AE boot-visible GICv4.1 discovery.
+         *  DirectLPI, Dirty and RVPEID are Apollo opt-in GICv4.1 features.
          *  VLPIS == 1 if vLPIs supported (GICv4 and up)
          *  PLPIS == 1 if LPIs supported
          */
@@ -480,6 +505,8 @@ static void arm_gicv3_common_realize(DeviceState *dev, Error **errp)
         s->cpu[i].gicr_typer = (cpu_affid << 32) |
             (1 << 24) |
             (i << 8);
+        s->cpu[i].gicr_typer = deposit64(s->cpu[i].gicr_typer, 27, 5,
+                                         s->num_eppi / 32);
 
         if (s->lpi_enable) {
             s->cpu[i].gicr_typer |= GICR_TYPER_PLPIS;
@@ -534,6 +561,8 @@ static void arm_gicv3_common_reset_hold(Object *obj, ResetType type)
         cs->gicr_pendbaser = 0;
         cs->gicr_vpropbaser = 0;
         cs->gicr_vpendbaser = 0;
+        cs->gicr_vpend_vptaddr = 0;
+        cs->gicr_vpend_vconfaddr = 0;
         /* If we're resetting a TZ-aware GIC as if secure firmware
          * had set it up ready to start a kernel in non-secure, we
          * need to set interrupts to group 1 so the kernel can use them.
@@ -585,6 +614,7 @@ static void arm_gicv3_common_reset_hold(Object *obj, ResetType type)
     memset(s->gicd_ipriority, 0, sizeof(s->gicd_ipriority));
     memset(s->gicd_irouter, 0, sizeof(s->gicd_irouter));
     memset(s->gicd_nsacr, 0, sizeof(s->gicd_nsacr));
+    gicv3_ext_range_reset(s);
     /* GICD_IROUTER are UNKNOWN at reset so in theory the guest must
      * write these to get sane behaviour and we need not populate the
      * pointer cache here; however having the cache be different for
@@ -601,6 +631,12 @@ static void arm_gicv3_common_reset_hold(Object *obj, ResetType type)
          */
         for (i = GIC_INTERNAL; i < s->num_irq; i++) {
             gicv3_gicd_group_set(s, i);
+        }
+        for (i = 0; i < s->num_espi; i++) {
+            set_bit32(i, s->espi_group);
+        }
+        for (i = 0; i < s->num_cpu; i++) {
+            memset(s->cpu[i].eppi_group, 0xff, s->num_eppi / 8);
         }
     }
     s->gicd_no_migration_shift_bug = true;
@@ -626,6 +662,8 @@ static void arm_gic_common_linux_init(ARMLinuxBootIf *obj,
 static const Property arm_gicv3_common_properties[] = {
     DEFINE_PROP_UINT32("num-cpu", GICv3State, num_cpu, 1),
     DEFINE_PROP_UINT32("num-irq", GICv3State, num_irq, 32),
+    DEFINE_PROP_UINT32("num-espi", GICv3State, num_espi, 0),
+    DEFINE_PROP_UINT32("num-eppi", GICv3State, num_eppi, 0),
     DEFINE_PROP_UINT32("revision", GICv3State, revision, 3),
     DEFINE_PROP_BOOL("has-lpi", GICv3State, lpi_enable, 0),
     DEFINE_PROP_BOOL("has-nmi", GICv3State, nmi_support, 0),

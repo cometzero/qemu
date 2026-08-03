@@ -154,6 +154,12 @@ static void whpx_gicv3_realize(DeviceState *dev, Error **errp)
     WHPXARMGICv3Class *kgc = WHPX_GICV3_GET_CLASS(s);
     int i;
 
+    if (s->num_espi || s->num_eppi) {
+        error_setg(errp, "extended SPI/PPI ranges are not supported by "
+                   "the WHPX platform GICv3");
+        return;
+    }
+
     kgc->parent_realize(dev, errp);
     if (*errp) {
         return;

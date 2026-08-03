@@ -54,8 +54,18 @@
 #define GICD_CPENDSGIR       0x0F10
 #define GICD_SPENDSGIR       0x0F20
 #define GICD_INMIR           0x0F80
+#define GICD_IGROUPRnE       0x1000
+#define GICD_ISENABLERnE     0x1200
+#define GICD_ICENABLERnE     0x1400
+#define GICD_ISPENDRnE       0x1600
+#define GICD_ICPENDRnE       0x1800
+#define GICD_ISACTIVERnE     0x1A00
+#define GICD_ICACTIVERnE     0x1C00
+#define GICD_IPRIORITYRnE    0x2000
+#define GICD_ICFGRnE         0x3000
 #define GICD_INMIRnE         0x3B00
 #define GICD_IROUTER         0x6000
+#define GICD_IROUTERnE       0x8000
 #define GICD_IDREGS          0xFFD0
 
 /* GICD_CTLR fields  */
@@ -73,6 +83,8 @@
 
 #define GICD_TYPER_NMI_SHIFT           9
 #define GICD_TYPER_LPIS_SHIFT          17
+#define GICD_TYPER_ESPI                 (1U << 8)
+#define GICD_TYPER_ESPI_RANGE_SHIFT     27
 
 #define GICD_TYPER2_VID                0x1f
 #define GICD_TYPER2_VIL                (1U << 7)
@@ -158,7 +170,7 @@ FIELD(GICR_PENDBASER, PTZ, 62, 1)
 
 #define GICR_PROPBASER_IDBITS_THRESHOLD          0xd
 
-/* These are the GICv4 VPROPBASER and VPENDBASER layouts; v4.1 is different */
+/* These are the GICv4 VPROPBASER and VPENDBASER layouts. */
 FIELD(GICR_VPROPBASER, IDBITS, 0, 5)
 FIELD(GICR_VPROPBASER, INNERCACHE, 7, 3)
 FIELD(GICR_VPROPBASER, SHAREABILITY, 10, 2)
@@ -173,6 +185,11 @@ FIELD(GICR_VPENDBASER, DIRTY, 60, 1)
 FIELD(GICR_VPENDBASER, PENDINGLAST, 61, 1)
 FIELD(GICR_VPENDBASER, IDAI, 62, 1)
 FIELD(GICR_VPENDBASER, VALID, 63, 1)
+
+FIELD(GICR_VPENDBASER_4_1, VPEID, 0, 16)
+FIELD(GICR_VPENDBASER_4_1, DIRTY, 60, 1)
+FIELD(GICR_VPENDBASER_4_1, PENDINGLAST, 61, 1)
+FIELD(GICR_VPENDBASER_4_1, VALID, 63, 1)
 
 #define ICC_CTLR_EL1_CBPR           (1U << 0)
 #define ICC_CTLR_EL1_EOIMODE        (1U << 1)
@@ -524,6 +541,15 @@ FIELD(VTE, VPTSIZE, 1, 5)
 FIELD(VTE, VPTADDR, 6, 36)
 FIELD(VTE, RDBASE, 42, RDBASE_PROCNUM_LENGTH)
 
+#define GITS_VPE_4_1_SIZE 0x20ULL
+
+FIELD(VTE_4_1_0, VALID, 0, 1)
+FIELD(VTE_4_1_0, ALLOC, 1, 1)
+FIELD(VTE_4_1_0, PTZ, 2, 1)
+FIELD(VTE_4_1_0, VPTSIZE, 8, 8)
+FIELD(VTE_4_1_0, RDBASE, 16, RDBASE_PROCNUM_LENGTH)
+FIELD(VTE_4_1_3, DEFAULT_DOORBELL, 0, 24)
+
 /* Special interrupt IDs */
 #define INTID_SECURE 1020
 #define INTID_NONSECURE 1021
@@ -616,12 +642,15 @@ MemTxResult gicv3_redist_write(void *opaque, hwaddr offset, uint64_t data,
                                unsigned size, MemTxAttrs attrs);
 void gicv3_dist_set_irq(GICv3State *s, int irq, int level);
 void gicv3_redist_set_irq(GICv3CPUState *cs, int irq, int level);
+void gicv3_set_irq(void *opaque, int irq, int level);
 void gicv3_redist_process_lpi(GICv3CPUState *cs, int irq, int level);
 /**
  * gicv3_redist_process_vlpi:
  * @cs: GICv3CPUState
  * @irq: (virtual) interrupt number
  * @vptaddr: (guest) address of VLPI table
+ * @vpeid: vPE table index for GICv4.1 residency matching
+ * @vconfaddr: (guest) address of VLPI configuration table
  * @doorbell: doorbell (physical) interrupt number (1023 for "no doorbell")
  * @level: level to set @irq to
  *
@@ -633,6 +662,7 @@ void gicv3_redist_process_lpi(GICv3CPUState *cs, int irq, int level);
  * interrupt instead.
  */
 void gicv3_redist_process_vlpi(GICv3CPUState *cs, int irq, uint64_t vptaddr,
+                               uint64_t vconfaddr, uint32_t vpeid,
                                int doorbell, int level);
 /**
  * gicv3_redist_vlpi_pending:
@@ -679,10 +709,12 @@ void gicv3_redist_inv_lpi(GICv3CPUState *cs, int irq);
  * @cs: GICv3CPUState
  * @irq: vLPI to invalidate cached information for
  * @vptaddr: (guest) address of vLPI table
+ * @vpeid: vPE table index for GICv4.1 residency matching
  *
  * Forget or update any cached information associated with this vLPI.
  */
-void gicv3_redist_inv_vlpi(GICv3CPUState *cs, int irq, uint64_t vptaddr);
+void gicv3_redist_inv_vlpi(GICv3CPUState *cs, int irq, uint64_t vptaddr,
+                           uint32_t vpeid);
 /**
  * gicv3_redist_mov_lpi:
  * @src: source redistributor
@@ -707,8 +739,11 @@ void gicv3_redist_movall_lpis(GICv3CPUState *src, GICv3CPUState *dest);
  * gicv3_redist_mov_vlpi:
  * @src: source redistributor
  * @src_vptaddr: (guest) address of source VLPI table
+ * @src_vpeid: source vPE table index
  * @dest: destination redistributor
  * @dest_vptaddr: (guest) address of destination VLPI table
+ * @dest_vconfaddr: (guest) address of destination VLPI configuration table
+ * @dest_vpeid: destination vPE table index
  * @irq: VLPI to update
  * @doorbell: doorbell for destination (1023 for "no doorbell")
  *
@@ -716,17 +751,20 @@ void gicv3_redist_movall_lpis(GICv3CPUState *src, GICv3CPUState *dest);
  * as required by the ITS VMOVI command.
  */
 void gicv3_redist_mov_vlpi(GICv3CPUState *src, uint64_t src_vptaddr,
-                           GICv3CPUState *dest, uint64_t dest_vptaddr,
-                           int irq, int doorbell);
+                           uint32_t src_vpeid, GICv3CPUState *dest,
+                           uint64_t dest_vptaddr, uint64_t dest_vconfaddr,
+                           uint32_t dest_vpeid, int irq, int doorbell);
 /**
  * gicv3_redist_vinvall:
  * @cs: GICv3CPUState
  * @vptaddr: address of VLPI pending table
+ * @vpeid: vPE table index for GICv4.1 residency matching
  *
  * On redistributor @cs, invalidate all cached information associated
  * with the vCPU defined by @vptaddr.
  */
-void gicv3_redist_vinvall(GICv3CPUState *cs, uint64_t vptaddr);
+void gicv3_redist_vinvall(GICv3CPUState *cs, uint64_t vptaddr,
+                          uint32_t vpeid);
 
 void gicv3_redist_send_sgi(GICv3CPUState *cs, int grp, int irq, bool ns);
 void gicv3_init_cpuif(GICv3State *s);
@@ -807,7 +845,18 @@ static inline int gicv3_irq_group(GICv3State *s, GICv3CPUState *cs, int irq)
     if (irq < GIC_INTERNAL) {
         grpbit = extract32(cs->gicr_igroupr0, irq, 1);
         grpmodbit = extract32(cs->gicr_igrpmodr0, irq, 1);
+    } else if (irq >= GICV3_EPPI_INTID_START &&
+               irq - GICV3_EPPI_INTID_START < s->num_eppi) {
+        irq -= GICV3_EPPI_INTID_START;
+        grpbit = test_bit32(irq, cs->eppi_group);
+        grpmodbit = test_bit32(irq, cs->eppi_grpmod);
+    } else if (irq >= GICV3_ESPI_INTID_START &&
+               irq - GICV3_ESPI_INTID_START < s->num_espi) {
+        irq -= GICV3_ESPI_INTID_START;
+        grpbit = test_bit32(irq, s->espi_group);
+        grpmodbit = test_bit32(irq, s->espi_grpmod);
     } else {
+        g_assert(irq < s->num_irq);
         grpbit = gicv3_gicd_group_test(s, irq);
         grpmodbit = gicv3_gicd_grpmod_test(s, irq);
     }
@@ -865,6 +914,32 @@ static inline void gicv3_cache_all_target_cpustates(GICv3State *s)
 
     for (irq = GIC_INTERNAL; irq < GICV3_MAXIRQ; irq++) {
         gicv3_cache_target_cpustate(s, irq);
+    }
+}
+
+static inline void gicv3_cache_espi_target_cpustate(GICv3State *s, int irq)
+{
+    GICv3CPUState *cs = NULL;
+    int i;
+    uint32_t tgtaff = extract64(s->espi_irouter[irq], 0, 24) |
+        extract64(s->espi_irouter[irq], 32, 8) << 24;
+
+    for (i = 0; i < s->num_cpu; i++) {
+        if (s->cpu[i].gicr_typer >> 32 == tgtaff) {
+            cs = &s->cpu[i];
+            break;
+        }
+    }
+
+    s->espi_irouter_target[irq] = cs;
+}
+
+static inline void gicv3_cache_all_espi_target_cpustates(GICv3State *s)
+{
+    int irq;
+
+    for (irq = 0; irq < s->num_espi; irq++) {
+        gicv3_cache_espi_target_cpustate(s, irq);
     }
 }
 

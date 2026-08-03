@@ -253,6 +253,16 @@ qtests_arm = \
 
 # TODO: once aarch64 TCG is fixed on ARM 32 bit host, make bios-tables-test unconditional
 qtests_aarch64 = \
+  (config_all_devices.has_key('CONFIG_ARM_VIRT') ? ['arm-gicv3-baseline-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_ARM_VIRT') ? ['arm-gicv3-ext-range-cpuif-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_ARM_VIRT') ? ['arm-gicv3-ext-range-gpio-delivery-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_ARM_VIRT') ? ['arm-gicv3-eppi-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_ARM_VIRT') ? ['arm-gicv3-espi-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_ARM_VIRT') ? ['arm-gicv3-ext-range-gpio-abi-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_ARM_VIRT') ? ['arm-gicv3-ext-range-vmstate-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_ARM_VIRT') ? ['arm-gicv4-1-vpendbaser-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_ARM_VIRT') ? ['arm-gicv4-1-its-vpe-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_ARM_VIRT') ? ['arm-gicv4-1-direct-lpi-test'] : []) + \
   (cpu != 'arm' and unpack_edk2_blobs ? ['bios-tables-test'] : []) +                            \
   (config_all_devices.has_key('CONFIG_ARM_ARCH_TIMER_MMIO') ? ['arm-arch-timer-mmio-test'] : []) + \
   (config_all_accel.has_key('CONFIG_TCG') and config_all_devices.has_key('CONFIG_TPM_TIS_SYSBUS') ?            \
@@ -390,7 +400,32 @@ if get_option('replication').allowed()
   migration_colo_files = [files('migration/colo-tests.c')]
 endif
 
+arm_gicv3_ext_range_test_data = declare_dependency(
+  compile_args: '-DARM_GICV3_EXT_RANGE_TEST_DATA="@0@"'.format(
+    meson.project_source_root() / 'tests/qtest/data'),
+)
+
+arm_gicv3_ext_range_cpuif_guest = declare_dependency(
+  compile_args: '-DARM_GICV3_EXT_RANGE_CPUIF_GUEST="@0@"'.format(
+    meson.project_source_root() / 'tests/qtest/data/arm-gicv3-ext-range-cpuif-guest.S'),
+)
+
 qtests = {
+  'arm-gicv3-ext-range-cpuif-test': [
+    files('../../hw/intc/arm_gicv3_ext_range.c'), migration, io,
+    arm_gicv3_ext_range_cpuif_guest,
+  ],
+  'arm-gicv3-ext-range-gpio-delivery-test': [
+    files('../../hw/intc/arm_gicv3_ext_range.c'), migration, io,
+  ],
+  'arm-gicv3-eppi-test': [
+    files('../../hw/intc/arm_gicv3_redist.c'),
+  ],
+  'arm-gicv3-espi-test': files('../../hw/intc/arm_gicv3_dist.c'),
+  'arm-gicv3-ext-range-vmstate-test': [
+    files('../../hw/intc/arm_gicv3_ext_range.c'), migration, io,
+    arm_gicv3_ext_range_test_data,
+  ],
   'aspeed_hace-test': files('aspeed-hace-utils.c', 'aspeed_hace-test.c'),
   'aspeed_smc-test': files('aspeed-smc-utils.c', 'aspeed_smc-test.c'),
   'ast2700-hace-test': files('aspeed-hace-utils.c', 'ast2700-hace-test.c'),

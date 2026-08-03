@@ -791,6 +791,12 @@ static void kvm_arm_gicv3_realize(DeviceState *dev, Error **errp)
     Error *local_err = NULL;
     int i;
 
+    if (s->num_espi || s->num_eppi) {
+        error_setg(errp, "extended SPI/PPI ranges are not supported by "
+                   "the in-kernel VGICv3");
+        return;
+    }
+
     kgc->parent_realize(dev, &local_err);
     if (local_err) {
         error_propagate(errp, local_err);

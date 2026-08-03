@@ -21,6 +21,7 @@
 #include "qemu/main-loop.h"
 #include "qemu/rcu.h"
 #include "qemu/thread.h"
+#include "hw/core/cpu.h"
 #include "system/runstate.h"
 #include "system/system.h"
 #include "tcg/tcg.h"
@@ -47,6 +48,7 @@ struct LibQemuContext {
     GMainContext *iothread_context;
     int argc;
     char **argv;
+    bool shutdown_requested;
 
     struct {
         LibQemuCpuEndOfLoopFn cb;
@@ -118,6 +120,9 @@ static void *iothread_entry(void *arg)
     qemu_init(context->argc, context->argv);
     int status = qemu_main_loop();
     qemu_cleanup(status);
+    if (bql_locked()) {
+        bql_unlock();
+    }
 
     g_main_context_pop_thread_default(context->iothread_context);
 
@@ -129,7 +134,9 @@ static void *iothread_entry(void *arg)
         g_main_context_release(context->iothread_context);
     }
 
-    exit(status);
+    if (!qatomic_read(&context->shutdown_requested)) {
+        exit(status);
+    }
     return NULL;
 }
 
@@ -180,6 +187,60 @@ LibQemuExports *LIBQEMU_INIT_SYM(int argc, char **argv)
     start_iothread(argc, argv);
 
     return &context.exports;
+}
+
+bool libqemu_shutdown_requested(void)
+{
+    return qatomic_read(&context.shutdown_requested);
+}
+
+void libqemu_shutdown(void)
+{
+    CPUState *cpu;
+    GPtrArray *threads;
+    guint i;
+
+    if (qatomic_xchg(&context.shutdown_requested, true)) {
+        return;
+    }
+
+    threads = g_ptr_array_new();
+    bql_lock();
+    CPU_FOREACH(cpu) {
+        bool known_thread = false;
+
+        if (!coroutine_tcg && cpu->created) {
+            for (i = 0; i < threads->len; ++i) {
+                if (g_ptr_array_index(threads, i) == cpu->thread) {
+                    known_thread = true;
+                    break;
+                }
+            }
+            if (!known_thread) {
+                g_ptr_array_add(threads, cpu->thread);
+            }
+        }
+
+        cpu->stop = true;
+        cpu->unplug = true;
+        cpu_exit(cpu);
+        qemu_cpu_kick(cpu);
+    }
+    bql_unlock();
+
+    for (i = 0; i < threads->len; ++i) {
+        qemu_thread_join(g_ptr_array_index(threads, i));
+    }
+    g_ptr_array_free(threads, true);
+
+    context.cpu_end_of_loop_cb.cb = NULL;
+    context.cpu_pc_entry_cb.cb = NULL;
+    context.cpu_kick_cb.cb = NULL;
+    context.vm_state_cb.cb = NULL;
+    context.iommu_translate_cb.cb = NULL;
+
+    qemu_system_shutdown_request(SHUTDOWN_CAUSE_HOST_QMP_QUIT);
+    qemu_thread_join(&context.iothread);
 }
 
 void libqemu_set_cpu_end_of_loop_cb(LibQemuCpuEndOfLoopFn cb, void *opaque)
@@ -287,6 +348,9 @@ bool libqemu_cpu_pc_entry_watch_same_page(uint64_t pc, uint64_t page_mask)
 
 void libqemu_cpu_end_of_loop_cb(CPUState *cpu)
 {
+    if (libqemu_shutdown_requested()) {
+        return;
+    }
     LibQemuCpuEndOfLoopFn cb = context.cpu_end_of_loop_cb.cb;
     void *opaque = context.cpu_end_of_loop_cb.opaque;
 
@@ -303,6 +367,9 @@ void libqemu_set_cpu_kick_cb(LibQemuCpuKickFn cb, void *opaque)
 
 void libqemu_cpu_kick_cb(CPUState *cpu)
 {
+    if (libqemu_shutdown_requested()) {
+        return;
+    }
     LibQemuCpuKickFn cb = context.cpu_kick_cb.cb;
     void *opaque = context.cpu_kick_cb.opaque;
 

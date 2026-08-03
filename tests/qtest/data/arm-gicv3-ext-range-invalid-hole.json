@@ -1,0 +1,11 @@
+[
+  { "intid": 992, "cpu": 0, "expected": "reject" },
+  { "intid": 1019, "cpu": 0, "expected": "reject" },
+  { "intid": 1020, "cpu": 0, "expected": "reject" },
+  { "intid": 1055, "cpu": 0, "expected": "reject" },
+  { "intid": 1120, "cpu": 0, "expected": "reject" },
+  { "intid": 4095, "cpu": 0, "expected": "reject" },
+  { "intid": 5120, "cpu": 0, "expected": "reject" },
+  { "intid": 31, "cpu": 2, "expected": "reject" },
+  { "intid": 1056, "cpu": 2, "expected": "reject" }
+]

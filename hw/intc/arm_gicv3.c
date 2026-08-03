@@ -138,23 +138,85 @@ static uint32_t gicr_int_pending(GICv3CPUState *cs)
     return pend;
 }
 
-static bool gicv3_get_priority(GICv3CPUState *cs, bool is_redist, int irq,
-                               uint8_t *prio)
+static uint32_t gicv3_espi_int_pending(GICv3State *s, int index)
 {
-    uint32_t nmi = 0x0;
+    uint32_t pending = *gic_bmp_ptr32(s->espi_pending, index);
+    uint32_t edge = *gic_bmp_ptr32(s->espi_edge_trigger, index);
+    uint32_t level = *gic_bmp_ptr32(s->espi_level, index);
+    uint32_t group = *gic_bmp_ptr32(s->espi_group, index);
+    uint32_t grpmod = *gic_bmp_ptr32(s->espi_grpmod, index);
+    uint32_t enabled = *gic_bmp_ptr32(s->espi_enabled, index);
+    uint32_t active = *gic_bmp_ptr32(s->espi_active, index);
+    uint32_t grpmask = 0;
 
-    if (is_redist) {
+    pending = (pending | (~edge & level)) & enabled & ~active;
+    if (s->gicd_ctlr & GICD_CTLR_DS) {
+        grpmod = 0;
+    }
+    if (s->gicd_ctlr & GICD_CTLR_EN_GRP1NS) {
+        grpmask |= group;
+    }
+    if (s->gicd_ctlr & GICD_CTLR_EN_GRP1S) {
+        grpmask |= ~group & grpmod;
+    }
+    if (s->gicd_ctlr & GICD_CTLR_EN_GRP0) {
+        grpmask |= ~group & ~grpmod;
+    }
+    return pending & grpmask;
+}
+
+static uint32_t gicr_eppi_int_pending(GICv3CPUState *cs, int index)
+{
+    uint32_t pending = *gic_bmp_ptr32(cs->eppi_pending, index);
+    uint32_t edge = *gic_bmp_ptr32(cs->eppi_edge_trigger, index);
+    uint32_t level = *gic_bmp_ptr32(cs->eppi_level, index);
+    uint32_t group = *gic_bmp_ptr32(cs->eppi_group, index);
+    uint32_t grpmod = *gic_bmp_ptr32(cs->eppi_grpmod, index);
+    uint32_t enabled = *gic_bmp_ptr32(cs->eppi_enabled, index);
+    uint32_t active = *gic_bmp_ptr32(cs->eppi_active, index);
+    uint32_t grpmask = 0;
+
+    pending = (pending | (~edge & level)) & enabled & ~active;
+    if (cs->gic->gicd_ctlr & GICD_CTLR_DS) {
+        grpmod = 0;
+    }
+    if (cs->gic->gicd_ctlr & GICD_CTLR_EN_GRP1NS) {
+        grpmask |= group;
+    }
+    if (cs->gic->gicd_ctlr & GICD_CTLR_EN_GRP1S) {
+        grpmask |= ~group & grpmod;
+    }
+    if (cs->gic->gicd_ctlr & GICD_CTLR_EN_GRP0) {
+        grpmask |= ~group & ~grpmod;
+    }
+    return pending & grpmask;
+}
+
+static bool gicv3_get_priority(GICv3CPUState *cs, int irq, uint8_t *prio)
+{
+    GICv3State *s = cs->gic;
+    uint32_t nmi = 0x0;
+    int index;
+
+    if (irq < GIC_INTERNAL) {
         nmi = extract32(cs->gicr_inmir0, irq, 1);
+    } else if (irq >= GICV3_EPPI_INTID_START &&
+               irq - GICV3_EPPI_INTID_START < s->num_eppi) {
+        index = irq - GICV3_EPPI_INTID_START;
+        nmi = test_bit32(index, cs->eppi_nmi);
+    } else if (irq >= GICV3_ESPI_INTID_START &&
+               irq - GICV3_ESPI_INTID_START < s->num_espi) {
+        index = irq - GICV3_ESPI_INTID_START;
+        nmi = test_bit32(index, s->espi_nmi);
     } else {
-        nmi = *gic_bmp_ptr32(cs->gic->nmi, irq);
+        g_assert(irq < s->num_irq);
+        nmi = *gic_bmp_ptr32(s->nmi, irq);
         nmi = nmi & (1 << (irq & 0x1f));
     }
 
     if (nmi) {
-        /* DS = 0 & Non-secure NMI */
-        if (!(cs->gic->gicd_ctlr & GICD_CTLR_DS) &&
-            ((is_redist && extract32(cs->gicr_igroupr0, irq, 1)) ||
-             (!is_redist && gicv3_gicd_group_test(cs->gic, irq)))) {
+        if (!(s->gicd_ctlr & GICD_CTLR_DS) &&
+            gicv3_irq_group(s, cs, irq) == GICV3_G1NS) {
             *prio = 0x80;
         } else {
             *prio = 0x0;
@@ -163,10 +225,16 @@ static bool gicv3_get_priority(GICv3CPUState *cs, bool is_redist, int irq,
         return true;
     }
 
-    if (is_redist) {
+    if (irq < GIC_INTERNAL) {
         *prio = cs->gicr_ipriorityr[irq];
+    } else if (irq >= GICV3_EPPI_INTID_START &&
+               irq - GICV3_EPPI_INTID_START < s->num_eppi) {
+        *prio = cs->eppi_priority[irq - GICV3_EPPI_INTID_START];
+    } else if (irq >= GICV3_ESPI_INTID_START &&
+               irq - GICV3_ESPI_INTID_START < s->num_espi) {
+        *prio = s->espi_priority[irq - GICV3_ESPI_INTID_START];
     } else {
-        *prio = cs->gic->gicd_ipriority[irq];
+        *prio = s->gicd_ipriority[irq];
     }
 
     return false;
@@ -184,6 +252,7 @@ static void gicv3_redist_update_noirqset(GICv3CPUState *cs)
     uint8_t prio;
     int i;
     uint32_t pend;
+    uint32_t eppi_pending = 0;
     bool nmi = false;
 
     /* Find out which redistributor interrupts are eligible to be
@@ -196,13 +265,31 @@ static void gicv3_redist_update_noirqset(GICv3CPUState *cs)
             if (!(pend & (1 << i))) {
                 continue;
             }
-            nmi = gicv3_get_priority(cs, true, i, &prio);
+            nmi = gicv3_get_priority(cs, i, &prio);
             if (irqbetter(cs, i, prio, nmi)) {
                 cs->hppi.irq = i;
                 cs->hppi.prio = prio;
                 cs->hppi.nmi = nmi;
                 seenbetter = true;
             }
+        }
+    }
+
+    for (i = 0; i < cs->gic->num_eppi; i++) {
+        int intid = GICV3_EPPI_INTID_START + i;
+
+        if ((i & 0x1f) == 0) {
+            eppi_pending = gicr_eppi_int_pending(cs, i);
+        }
+        if (!(eppi_pending & BIT(i & 0x1f))) {
+            continue;
+        }
+        nmi = gicv3_get_priority(cs, intid, &prio);
+        if (irqbetter(cs, intid, prio, nmi)) {
+            cs->hppi.irq = intid;
+            cs->hppi.prio = prio;
+            cs->hppi.nmi = nmi;
+            seenbetter = true;
         }
     }
 
@@ -235,6 +322,8 @@ static void gicv3_redist_update_noirqset(GICv3CPUState *cs)
      */
     if (!seenbetter && cs->hppi.prio != 0xff &&
         (cs->hppi.irq < GIC_INTERNAL ||
+         (cs->hppi.irq >= GICV3_EPPI_INTID_START &&
+          cs->hppi.irq - GICV3_EPPI_INTID_START < cs->gic->num_eppi) ||
          cs->hppi.irq >= GICV3_LPI_INTID_START)) {
         gicv3_full_update_noirqset(cs->gic);
     }
@@ -287,7 +376,7 @@ static void gicv3_update_noirqset(GICv3State *s, int start, int len)
              */
             continue;
         }
-        nmi = gicv3_get_priority(cs, false, i, &prio);
+        nmi = gicv3_get_priority(cs, i, &prio);
         if (irqbetter(cs, i, prio, nmi)) {
             cs->hppi.irq = i;
             cs->hppi.prio = prio;
@@ -322,6 +411,37 @@ static void gicv3_update_noirqset(GICv3State *s, int start, int len)
     }
 }
 
+static void gicv3_espi_update_noirqset(GICv3State *s)
+{
+    int i;
+    uint32_t pending = 0;
+
+    for (i = 0; i < s->num_espi; i++) {
+        GICv3CPUState *cs;
+        int intid = GICV3_ESPI_INTID_START + i;
+        uint8_t prio;
+        bool nmi;
+
+        if ((i & 0x1f) == 0) {
+            pending = gicv3_espi_int_pending(s, i);
+        }
+        if (!(pending & BIT(i & 0x1f))) {
+            continue;
+        }
+        cs = s->espi_irouter_target[i];
+        if (!cs) {
+            continue;
+        }
+        nmi = gicv3_get_priority(cs, intid, &prio);
+        if (irqbetter(cs, intid, prio, nmi)) {
+            cs->hppi.irq = intid;
+            cs->hppi.prio = prio;
+            cs->hppi.nmi = nmi;
+            cs->hppi.grp = gicv3_irq_group(s, cs, intid);
+        }
+    }
+}
+
 void gicv3_update(GICv3State *s, int start, int len)
 {
     int i;
@@ -349,7 +469,11 @@ void gicv3_full_update_noirqset(GICv3State *s)
      * at each point the "previous best" is always outside the
      * range we ask them to update.
      */
-    gicv3_update_noirqset(s, GIC_INTERNAL, s->num_irq - GIC_INTERNAL);
+    if (s->num_irq > GIC_INTERNAL) {
+        gicv3_update_noirqset(s, GIC_INTERNAL,
+                              s->num_irq - GIC_INTERNAL);
+    }
+    gicv3_espi_update_noirqset(s);
 
     for (i = 0; i < s->num_cpu; i++) {
         gicv3_redist_update_noirqset(&s->cpu[i]);
@@ -369,36 +493,6 @@ void gicv3_full_update(GICv3State *s)
     }
 }
 
-/* Process a change in an external IRQ input. */
-static void gicv3_set_irq(void *opaque, int irq, int level)
-{
-    /* Meaning of the 'irq' parameter:
-     *  [0..N-1] : external interrupts
-     *  [N..N+31] : PPI (internal) interrupts for CPU 0
-     *  [N+32..N+63] : PPI (internal interrupts for CPU 1
-     *  ...
-     */
-    GICv3State *s = opaque;
-
-    if (irq < (s->num_irq - GIC_INTERNAL)) {
-        /* external interrupt (SPI) */
-        gicv3_dist_set_irq(s, irq + GIC_INTERNAL, level);
-    } else {
-        /* per-cpu interrupt (PPI) */
-        int cpu;
-
-        irq -= (s->num_irq - GIC_INTERNAL);
-        cpu = irq / GIC_INTERNAL;
-        irq %= GIC_INTERNAL;
-        assert(cpu < s->num_cpu);
-        /* Raising SGIs via this function would be a bug in how the board
-         * model wires up interrupts.
-         */
-        assert(irq >= GIC_NR_SGIS);
-        gicv3_redist_set_irq(&s->cpu[cpu], irq, level);
-    }
-}
-
 static void arm_gicv3_post_load(GICv3State *s)
 {
     int i;
@@ -411,6 +505,7 @@ static void arm_gicv3_post_load(GICv3State *s)
     gicv3_full_update_noirqset(s);
     /* Repopulate the cache of GICv3CPUState pointers for target CPUs */
     gicv3_cache_all_target_cpustates(s);
+    gicv3_cache_all_espi_target_cpustates(s);
 }
 
 static const MemoryRegionOps gic_ops[] = {

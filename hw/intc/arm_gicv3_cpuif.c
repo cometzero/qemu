@@ -1166,6 +1166,8 @@ static void icc_activate_irq(GICv3CPUState *cs, int irq)
     int regno = aprbit / 32;
     int regbit = aprbit % 32;
     bool nmi = cs->hppi.nmi;
+    GICv3IRQ decoded;
+    uint32_t cpu = cs - cs->gic->cpu;
 
     if (nmi) {
         cs->icc_apr[cs->hppi.grp][regno] |= ICC_AP1R_EL1_NMI;
@@ -1173,16 +1175,34 @@ static void icc_activate_irq(GICv3CPUState *cs, int irq)
         cs->icc_apr[cs->hppi.grp][regno] |= (1U << regbit);
     }
 
-    if (irq < GIC_INTERNAL) {
+    if (irq >= GICV3_LPI_INTID_START) {
+        gicv3_redist_lpi_pending(cs, irq, 0);
+        return;
+    }
+    g_assert(gicv3_intid_to_irq(cs->gic, irq, cpu, &decoded));
+    switch (decoded.type) {
+    case GICV3_IRQ_PPI:
         cs->gicr_iactiver0 = deposit32(cs->gicr_iactiver0, irq, 1, 1);
         cs->gicr_ipendr0 = deposit32(cs->gicr_ipendr0, irq, 1, 0);
         gicv3_redist_update(cs);
-    } else if (irq < GICV3_LPI_INTID_START) {
+        break;
+    case GICV3_IRQ_EPPI:
+        set_bit32(decoded.index, cs->eppi_active);
+        clear_bit32(decoded.index, cs->eppi_pending);
+        gicv3_redist_update(cs);
+        break;
+    case GICV3_IRQ_SPI:
         gicv3_gicd_active_set(cs->gic, irq);
         gicv3_gicd_pending_clear(cs->gic, irq);
         gicv3_update(cs->gic, irq, 1);
-    } else {
-        gicv3_redist_lpi_pending(cs, irq, 0);
+        break;
+    case GICV3_IRQ_ESPI:
+        set_bit32(decoded.index, cs->gic->espi_active);
+        clear_bit32(decoded.index, cs->gic->espi_pending);
+        gicv3_full_update(cs->gic);
+        break;
+    default:
+        g_assert_not_reached();
     }
 }
 
@@ -1435,12 +1455,34 @@ static int icc_highest_active_group(GICv3CPUState *cs)
 
 static void icc_deactivate_irq(GICv3CPUState *cs, int irq)
 {
-    if (irq < GIC_INTERNAL) {
+    GICv3IRQ decoded;
+    uint32_t cpu = cs - cs->gic->cpu;
+
+    if (!gicv3_intid_to_irq(cs->gic, irq, cpu, &decoded)) {
+        return;
+    }
+    switch (decoded.type) {
+    case GICV3_IRQ_PPI:
         cs->gicr_iactiver0 = deposit32(cs->gicr_iactiver0, irq, 1, 0);
         gicv3_redist_update(cs);
-    } else {
+        break;
+    case GICV3_IRQ_EPPI:
+        clear_bit32(decoded.index, cs->eppi_active);
+        gicv3_redist_update(cs);
+        break;
+    case GICV3_IRQ_SPI:
         gicv3_gicd_active_clear(cs->gic, irq);
         gicv3_update(cs->gic, irq, 1);
+        break;
+    case GICV3_IRQ_ESPI:
+        if (cs->gic->espi_irouter_target[decoded.index] != cs) {
+            return;
+        }
+        clear_bit32(decoded.index, cs->gic->espi_active);
+        gicv3_full_update(cs->gic);
+        break;
+    default:
+        g_assert_not_reached();
     }
 }
 
@@ -1659,7 +1701,7 @@ static void icc_eoir_write(CPUARMState *env, const ARMCPRegInfo *ri,
     trace_gicv3_icc_eoir_write(is_eoir0 ? 0 : 1,
                                gicv3_redist_affid(cs), value);
 
-    if ((irq >= cs->gic->num_irq) &&
+    if (!gicv3_intid_to_irq(cs->gic, irq, cs - cs->gic->cpu, NULL) &&
         !(cs->gic->lpi_enable && (irq >= GICV3_LPI_INTID_START))) {
         /* This handles two cases:
          * 1. If software writes the ID of a spurious interrupt [ie 1020-1023]
@@ -1898,7 +1940,7 @@ static void icc_dir_write(CPUARMState *env, const ARMCPRegInfo *ri,
 
     trace_gicv3_icc_dir_write(gicv3_redist_affid(cs), value);
 
-    if (irq >= cs->gic->num_irq) {
+    if (!gicv3_intid_to_irq(cs->gic, irq, cs - cs->gic->cpu, NULL)) {
         /* Also catches special interrupt numbers and LPIs */
         return;
     }

@@ -31,6 +31,8 @@ typedef void (*LibQemuCpuEndOfLoopFn)(QemuObject *cpu, void *opaque);
 typedef bool (*LibQemuCpuPcEntryFn)(QemuObject *cpu, uint64_t pc, void *opaque);
 typedef void (*LibQemuCpuKickFn)(QemuObject *cpu, void *opaque);
 typedef void (*LibQemuVmStateFn)(bool running, void *opaque);
+
+void libqemu_shutdown(void);
 typedef IOMMUTLBEntry (*LibQemuIOMMUTranslateFn)(IOMMUMemoryRegion *mr,
                                                 void *opaque,
                                                 uint64_t addr, int flag,

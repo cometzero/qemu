@@ -37,6 +37,14 @@
 #define GICV3_MAXIRQ 2100
 #define GICV3_MAXSPI (GICV3_MAXIRQ - GIC_INTERNAL)
 
+#define GICV3_NORMAL_INTID_MAX 1020
+#define GICV3_ESPI_INTID_START 4096
+#define GICV3_EPPI_INTID_START 1056
+#define GICV3_MAX_ESPI 1024
+#define GICV3_MAX_EPPI 64
+#define GICV3_ESPI_BMP_SIZE BITS_TO_U32S(GICV3_MAX_ESPI)
+#define GICV3_EPPI_BMP_SIZE BITS_TO_U32S(GICV3_MAX_EPPI)
+
 #define GICV3_LPI_INTID_START 8192
 
 /*
@@ -153,9 +161,20 @@ struct GICv3CPUState {
     uint32_t gicr_igrpmodr0;
     uint32_t gicr_nsacr;
     uint8_t gicr_ipriorityr[GIC_INTERNAL];
+    uint32_t eppi_level[GICV3_EPPI_BMP_SIZE];
+    uint32_t eppi_group[GICV3_EPPI_BMP_SIZE];
+    uint32_t eppi_enabled[GICV3_EPPI_BMP_SIZE];
+    uint32_t eppi_pending[GICV3_EPPI_BMP_SIZE];
+    uint32_t eppi_active[GICV3_EPPI_BMP_SIZE];
+    uint32_t eppi_edge_trigger[GICV3_EPPI_BMP_SIZE];
+    uint32_t eppi_grpmod[GICV3_EPPI_BMP_SIZE];
+    uint32_t eppi_nmi[GICV3_EPPI_BMP_SIZE];
+    uint8_t eppi_priority[GICV3_MAX_EPPI];
     /* VLPI_base page registers */
     uint64_t gicr_vpropbaser;
     uint64_t gicr_vpendbaser;
+    uint64_t gicr_vpend_vptaddr;
+    uint64_t gicr_vpend_vconfaddr;
 
     /* CPU interface */
     uint64_t icc_sre_el1;
@@ -235,6 +254,8 @@ struct GICv3State {
     uint32_t first_cpu_idx;
     uint32_t num_cpu;
     uint32_t num_irq;
+    uint32_t num_espi;
+    uint32_t num_eppi;
     uint32_t revision;
     uint32_t maint_irq;
     bool lpi_enable;
@@ -277,6 +298,19 @@ struct GICv3State {
      */
     GICv3CPUState *gicd_irouter_target[GICV3_MAXIRQ];
     uint32_t gicd_nsacr[DIV_ROUND_UP(GICV3_MAXIRQ, 16)];
+
+    uint32_t espi_group[GICV3_ESPI_BMP_SIZE];
+    uint32_t espi_grpmod[GICV3_ESPI_BMP_SIZE];
+    uint32_t espi_enabled[GICV3_ESPI_BMP_SIZE];
+    uint32_t espi_pending[GICV3_ESPI_BMP_SIZE];
+    uint32_t espi_active[GICV3_ESPI_BMP_SIZE];
+    uint32_t espi_level[GICV3_ESPI_BMP_SIZE];
+    uint32_t espi_edge_trigger[GICV3_ESPI_BMP_SIZE];
+    uint32_t espi_nmi[GICV3_ESPI_BMP_SIZE];
+    uint8_t espi_priority[GICV3_MAX_ESPI];
+    uint64_t espi_irouter[GICV3_MAX_ESPI];
+    GICv3CPUState *espi_irouter_target[GICV3_MAX_ESPI];
+    uint32_t espi_nsacr[DIV_ROUND_UP(GICV3_MAX_ESPI, 16)];
 
     GICv3CPUState *cpu;
     /* List of all ITSes connected to this GIC */
@@ -329,6 +363,29 @@ struct ARMGICv3CommonClass {
     void (*pre_save)(GICv3State *s);
     void (*post_load)(GICv3State *s);
 };
+
+typedef enum GICv3IRQType {
+    GICV3_IRQ_SPI,
+    GICV3_IRQ_ESPI,
+    GICV3_IRQ_PPI,
+    GICV3_IRQ_EPPI,
+} GICv3IRQType;
+
+typedef struct GICv3IRQ {
+    GICv3IRQType type;
+    uint32_t intid;
+    uint32_t index;
+    uint32_t cpu;
+} GICv3IRQ;
+
+bool gicv3_intid_to_irq(const GICv3State *s, uint32_t intid,
+                        uint32_t cpu, GICv3IRQ *out);
+bool gicv3_gpio_to_irq(const GICv3State *s, uint32_t gpio, GICv3IRQ *out);
+bool gicv3_gpio_count(const GICv3State *s, int *count);
+void gicv3_ext_range_reset(GICv3State *s);
+
+extern const VMStateDescription vmstate_gicv3_espi;
+extern const VMStateDescription vmstate_gicv3_eppi;
 
 void gicv3_init_irqs_and_mmio(GICv3State *s, qemu_irq_handler handler,
                               const MemoryRegionOps *ops);

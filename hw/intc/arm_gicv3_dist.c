@@ -89,6 +89,148 @@ static int gicd_ns_access(GICv3State *s, int irq)
     return extract32(s->gicd_nsacr[irq / 16], (irq % 16) * 2, 2);
 }
 
+static int gicd_espi_ns_access(GICv3State *s, int irq)
+{
+    if (irq < 0 || irq >= s->num_espi) {
+        return 0;
+    }
+    return extract32(s->espi_nsacr[irq / 16], (irq % 16) * 2, 2);
+}
+
+static uint32_t gicd_espi_access_mask(GICv3State *s, MemTxAttrs attrs,
+                                      int irq, int min_nsacr)
+{
+    uint32_t mask;
+    int i;
+
+    if (attrs.secure || (s->gicd_ctlr & GICD_CTLR_DS)) {
+        return UINT32_MAX;
+    }
+
+    mask = *gic_bmp_ptr32(s->espi_group, irq);
+    if (min_nsacr) {
+        for (i = 0; i < 32; i++) {
+            if (gicd_espi_ns_access(s, irq + i) >= min_nsacr) {
+                mask |= BIT(i);
+            }
+        }
+    }
+    return mask;
+}
+
+static bool gicd_espi_word_index(GICv3State *s, hwaddr offset,
+                                 hwaddr base, int interrupts_per_reg,
+                                 int *irq)
+{
+    if ((offset - base) & 3) {
+        return false;
+    }
+    *irq = ((offset - base) / 4) * interrupts_per_reg;
+    return *irq < s->num_espi;
+}
+
+static uint32_t gicd_read_espi_bitmap_reg(GICv3State *s, MemTxAttrs attrs,
+                                          uint32_t *bmp, int min_nsacr,
+                                          int irq)
+{
+    uint32_t value = *gic_bmp_ptr32(bmp, irq);
+
+    if (bmp == s->espi_pending) {
+        uint32_t edge = *gic_bmp_ptr32(s->espi_edge_trigger, irq);
+        uint32_t level = *gic_bmp_ptr32(s->espi_level, irq);
+
+        value |= ~edge & level;
+    }
+    return value & gicd_espi_access_mask(s, attrs, irq, min_nsacr);
+}
+
+static void gicd_write_espi_bitmap_reg(GICv3State *s, MemTxAttrs attrs,
+                                       uint32_t *bmp, int min_nsacr,
+                                       int irq, uint32_t value)
+{
+    value &= gicd_espi_access_mask(s, attrs, irq, min_nsacr);
+    *gic_bmp_ptr32(bmp, irq) = value;
+}
+
+static void gicd_set_espi_bitmap_reg(GICv3State *s, MemTxAttrs attrs,
+                                     uint32_t *bmp, int min_nsacr,
+                                     int irq, uint32_t value)
+{
+    value &= gicd_espi_access_mask(s, attrs, irq, min_nsacr);
+    *gic_bmp_ptr32(bmp, irq) |= value;
+}
+
+static void gicd_clear_espi_bitmap_reg(GICv3State *s, MemTxAttrs attrs,
+                                       uint32_t *bmp, int min_nsacr,
+                                       int irq, uint32_t value)
+{
+    value &= gicd_espi_access_mask(s, attrs, irq, min_nsacr);
+    *gic_bmp_ptr32(bmp, irq) &= ~value;
+}
+
+static uint8_t gicd_read_espi_priority(GICv3State *s, MemTxAttrs attrs,
+                                      int irq)
+{
+    uint32_t priority;
+
+    if (irq < 0 || irq >= s->num_espi) {
+        return 0;
+    }
+    priority = s->espi_priority[irq];
+    if (!attrs.secure && !(s->gicd_ctlr & GICD_CTLR_DS)) {
+        if (!test_bit32(irq, s->espi_group)) {
+            return 0;
+        }
+        priority = (priority << 1) & 0xff;
+    }
+    return priority;
+}
+
+static void gicd_write_espi_priority(GICv3State *s, MemTxAttrs attrs,
+                                     int irq, uint8_t value)
+{
+    if (irq < 0 || irq >= s->num_espi) {
+        return;
+    }
+    if (!attrs.secure && !(s->gicd_ctlr & GICD_CTLR_DS)) {
+        if (!test_bit32(irq, s->espi_group)) {
+            return;
+        }
+        value = 0x80 | (value >> 1);
+    }
+    s->espi_priority[irq] = value;
+}
+
+static uint64_t gicd_read_espi_irouter(GICv3State *s, MemTxAttrs attrs,
+                                       int irq)
+{
+    if (irq < 0 || irq >= s->num_espi) {
+        return 0;
+    }
+    if (!attrs.secure && !(s->gicd_ctlr & GICD_CTLR_DS) &&
+        !test_bit32(irq, s->espi_group) &&
+        gicd_espi_ns_access(s, irq) != 3) {
+        return 0;
+    }
+    return s->espi_irouter[irq];
+}
+
+static void gicd_write_espi_irouter(GICv3State *s, MemTxAttrs attrs,
+                                    int irq, uint64_t value)
+{
+    if (irq < 0 || irq >= s->num_espi) {
+        return;
+    }
+    if (!attrs.secure && !(s->gicd_ctlr & GICD_CTLR_DS) &&
+        !test_bit32(irq, s->espi_group) &&
+        gicd_espi_ns_access(s, irq) != 3) {
+        return;
+    }
+    s->espi_irouter[irq] = value;
+    gicv3_cache_espi_target_cpustate(s, irq);
+    gicv3_full_update(s);
+}
+
 static void gicd_write_bitmap_reg(GICv3State *s, MemTxAttrs attrs,
                                   uint32_t *bmp, maskfn *maskfn,
                                   int offset, uint32_t val)
@@ -313,6 +455,10 @@ static bool gicd_readb(GICv3State *s, hwaddr offset,
     case GICD_IPRIORITYR ... GICD_IPRIORITYR + 0x3ff:
         *data = gicd_read_ipriorityr(s, attrs, offset - GICD_IPRIORITYR);
         return true;
+    case GICD_IPRIORITYRnE ... GICD_IPRIORITYRnE + 0x3ff:
+        *data = gicd_read_espi_priority(s, attrs,
+                                        offset - GICD_IPRIORITYRnE);
+        return true;
     default:
         return false;
     }
@@ -339,6 +485,16 @@ static bool gicd_writeb(GICv3State *s, hwaddr offset,
         }
         gicd_write_ipriorityr(s, attrs, irq, value);
         gicv3_update(s, irq, 1);
+        return true;
+    }
+    case GICD_IPRIORITYRnE ... GICD_IPRIORITYRnE + 0x3ff:
+    {
+        int irq = offset - GICD_IPRIORITYRnE;
+
+        if (irq >= s->num_espi) {
+            return true;
+        }
+        gicd_write_espi_priority(s, attrs, irq, value);
         return true;
     }
     default:
@@ -414,9 +570,11 @@ static bool gicd_readl(GICv3State *s, hwaddr offset,
          * SecurityExtn == 1 if security extns supported
          * NMI = 1 if Non-maskable interrupt property is supported
          * CPUNumber == 0 since for us ARE is always 1
-         * ITLinesNumber == (((max SPI IntID + 1) / 32) - 1)
+         * ITLinesNumber == 0x1e when ESPI is implemented, otherwise
+         *                   (((max SPI IntID + 1) / 32) - 1)
          */
-        int itlinesnumber = (s->num_irq / 32) - 1;
+        int itlinesnumber = s->num_espi ? 0x1e : (s->num_irq / 32) - 1;
+        uint32_t espi = 0;
         /*
          * SecurityExtn must be RAZ if GICD_CTLR.DS == 1, and
          * "security extensions not supported" always implies DS == 1,
@@ -425,7 +583,12 @@ static bool gicd_readl(GICv3State *s, hwaddr offset,
         bool sec_extn = !(s->gicd_ctlr & GICD_CTLR_DS);
         bool dvis = s->revision >= 4;
 
-        *data = (1 << 25) | (1 << 24) | (dvis << 18) | (sec_extn << 10) |
+        if (s->num_espi) {
+            espi = GICD_TYPER_ESPI |
+                ((s->num_espi / 32 - 1) << GICD_TYPER_ESPI_RANGE_SHIFT);
+        }
+        *data = espi | (1 << 25) | (1 << 24) | (dvis << 18) |
+            (sec_extn << 10) |
             (s->nmi_support << GICD_TYPER_NMI_SHIFT) |
             (s->lpi_enable << GICD_TYPER_LPIS_SHIFT) |
             (0xf << 19) | itlinesnumber;
@@ -579,6 +742,120 @@ static bool gicd_readl(GICv3State *s, hwaddr offset,
                 gicd_read_bitmap_reg(s, attrs, s->nmi, NULL,
                                      offset - GICD_INMIR);
         return true;
+    case GICD_IGROUPRnE ... GICD_IGROUPRnE + 0x7f:
+    {
+        int irq;
+
+        if (!gicd_espi_word_index(s, offset, GICD_IGROUPRnE, 32, &irq)) {
+            *data = 0;
+            return !((offset - GICD_IGROUPRnE) & 3);
+        }
+        if (!attrs.secure && !(s->gicd_ctlr & GICD_CTLR_DS)) {
+            *data = 0;
+            return true;
+        }
+        *data = *gic_bmp_ptr32(s->espi_group, irq);
+        return true;
+    }
+    case GICD_ISENABLERnE ... GICD_ISENABLERnE + 0x7f:
+    case GICD_ICENABLERnE ... GICD_ICENABLERnE + 0x7f:
+    case GICD_ISPENDRnE ... GICD_ISPENDRnE + 0x7f:
+    case GICD_ICPENDRnE ... GICD_ICPENDRnE + 0x7f:
+    case GICD_ISACTIVERnE ... GICD_ISACTIVERnE + 0x7f:
+    case GICD_ICACTIVERnE ... GICD_ICACTIVERnE + 0x7f:
+    {
+        uint32_t *bitmap;
+        hwaddr base;
+        int min_nsacr;
+        int irq;
+
+        if (offset >= GICD_ICACTIVERnE) {
+            bitmap = s->espi_active;
+            base = GICD_ICACTIVERnE;
+            min_nsacr = 2;
+        } else if (offset >= GICD_ISACTIVERnE) {
+            bitmap = s->espi_active;
+            base = GICD_ISACTIVERnE;
+            min_nsacr = 2;
+        } else if (offset >= GICD_ICPENDRnE) {
+            bitmap = s->espi_pending;
+            base = GICD_ICPENDRnE;
+            min_nsacr = 2;
+        } else if (offset >= GICD_ISPENDRnE) {
+            bitmap = s->espi_pending;
+            base = GICD_ISPENDRnE;
+            min_nsacr = 1;
+        } else if (offset >= GICD_ICENABLERnE) {
+            bitmap = s->espi_enabled;
+            base = GICD_ICENABLERnE;
+            min_nsacr = 0;
+        } else {
+            bitmap = s->espi_enabled;
+            base = GICD_ISENABLERnE;
+            min_nsacr = 0;
+        }
+        if (!gicd_espi_word_index(s, offset, base, 32, &irq)) {
+            *data = 0;
+            return !((offset - base) & 3);
+        }
+        *data = gicd_read_espi_bitmap_reg(s, attrs, bitmap,
+                                          min_nsacr, irq);
+        return true;
+    }
+    case GICD_IPRIORITYRnE ... GICD_IPRIORITYRnE + 0x3ff:
+    {
+        int i;
+        int irq = offset - GICD_IPRIORITYRnE;
+        uint32_t value = 0;
+
+        if ((offset - GICD_IPRIORITYRnE) & 3) {
+            return false;
+        }
+        if (irq + 3 >= s->num_espi) {
+            *data = 0;
+            return true;
+        }
+        for (i = irq + 3; i >= irq; i--) {
+            value <<= 8;
+            value |= gicd_read_espi_priority(s, attrs, i);
+        }
+        *data = value;
+        return true;
+    }
+    case GICD_ICFGRnE ... GICD_ICFGRnE + 0xff:
+    {
+        uint32_t value;
+        uint32_t mask;
+        int irq;
+
+        if (!gicd_espi_word_index(s, offset, GICD_ICFGRnE, 16, &irq)) {
+            *data = 0;
+            return !((offset - GICD_ICFGRnE) & 3);
+        }
+        value = *gic_bmp_ptr32(s->espi_edge_trigger, irq & ~0x1f);
+        mask = gicd_espi_access_mask(s, attrs, irq & ~0x1f, 0);
+        value &= mask;
+        value = extract32(value, (irq & 0x1f) ? 16 : 0, 16);
+        *data = half_shuffle32(value) << 1;
+        return true;
+    }
+    case GICD_IROUTERnE ... GICD_IROUTERnE + 0x1fff:
+    {
+        int irq;
+        uint64_t route;
+
+        if ((offset - GICD_IROUTERnE) & 3) {
+            return false;
+        }
+        irq = (offset - GICD_IROUTERnE) / 8;
+        if (irq >= s->num_espi) {
+            *data = 0;
+            return true;
+        }
+        route = gicd_read_espi_irouter(s, attrs, irq);
+        *data = (offset & 7) ? route >> 32 : (uint32_t)route;
+        return true;
+    }
     case GICD_IROUTER ... GICD_IROUTER + 0x1fdf:
     {
         uint64_t r;
@@ -794,6 +1071,135 @@ static bool gicd_writel(GICv3State *s, hwaddr offset,
                                   offset - GICD_INMIR, value);
         }
         return true;
+    case GICD_IGROUPRnE ... GICD_IGROUPRnE + 0x7f:
+    {
+        int irq;
+
+        if (!gicd_espi_word_index(s, offset, GICD_IGROUPRnE, 32, &irq)) {
+            return !((offset - GICD_IGROUPRnE) & 3);
+        }
+        if (!attrs.secure && !(s->gicd_ctlr & GICD_CTLR_DS)) {
+            return true;
+        }
+        gicd_write_espi_bitmap_reg(s, attrs, s->espi_group, 0,
+                                   irq, value);
+        gicv3_full_update(s);
+        return true;
+    }
+    case GICD_ISENABLERnE ... GICD_ISENABLERnE + 0x7f:
+    case GICD_ICENABLERnE ... GICD_ICENABLERnE + 0x7f:
+    case GICD_ISPENDRnE ... GICD_ISPENDRnE + 0x7f:
+    case GICD_ICPENDRnE ... GICD_ICPENDRnE + 0x7f:
+    case GICD_ISACTIVERnE ... GICD_ISACTIVERnE + 0x7f:
+    case GICD_ICACTIVERnE ... GICD_ICACTIVERnE + 0x7f:
+    {
+        uint32_t *bitmap;
+        hwaddr base;
+        int min_nsacr;
+        bool clear;
+        int irq;
+
+        if (offset >= GICD_ICACTIVERnE) {
+            bitmap = s->espi_active;
+            base = GICD_ICACTIVERnE;
+            min_nsacr = 0;
+            clear = true;
+        } else if (offset >= GICD_ISACTIVERnE) {
+            bitmap = s->espi_active;
+            base = GICD_ISACTIVERnE;
+            min_nsacr = 0;
+            clear = false;
+        } else if (offset >= GICD_ICPENDRnE) {
+            bitmap = s->espi_pending;
+            base = GICD_ICPENDRnE;
+            min_nsacr = 2;
+            clear = true;
+        } else if (offset >= GICD_ISPENDRnE) {
+            bitmap = s->espi_pending;
+            base = GICD_ISPENDRnE;
+            min_nsacr = 1;
+            clear = false;
+        } else if (offset >= GICD_ICENABLERnE) {
+            bitmap = s->espi_enabled;
+            base = GICD_ICENABLERnE;
+            min_nsacr = 0;
+            clear = true;
+        } else {
+            bitmap = s->espi_enabled;
+            base = GICD_ISENABLERnE;
+            min_nsacr = 0;
+            clear = false;
+        }
+        if (!gicd_espi_word_index(s, offset, base, 32, &irq)) {
+            return !((offset - base) & 3);
+        }
+        if (clear) {
+            gicd_clear_espi_bitmap_reg(s, attrs, bitmap, min_nsacr,
+                                       irq, value);
+        } else {
+            gicd_set_espi_bitmap_reg(s, attrs, bitmap, min_nsacr,
+                                     irq, value);
+        }
+        gicv3_full_update(s);
+        return true;
+    }
+    case GICD_IPRIORITYRnE ... GICD_IPRIORITYRnE + 0x3ff:
+    {
+        int i;
+        int irq = offset - GICD_IPRIORITYRnE;
+
+        if ((offset - GICD_IPRIORITYRnE) & 3) {
+            return false;
+        }
+        if (irq + 3 >= s->num_espi) {
+            return true;
+        }
+        for (i = irq; i < irq + 4; i++, value >>= 8) {
+            gicd_write_espi_priority(s, attrs, i, value);
+        }
+        gicv3_full_update(s);
+        return true;
+    }
+    case GICD_ICFGRnE ... GICD_ICFGRnE + 0xff:
+    {
+        uint32_t mask;
+        uint32_t old_value;
+        int irq;
+
+        if (!gicd_espi_word_index(s, offset, GICD_ICFGRnE, 16, &irq)) {
+            return !((offset - GICD_ICFGRnE) & 3);
+        }
+        value = half_unshuffle32(value >> 1);
+        mask = gicd_espi_access_mask(s, attrs, irq & ~0x1f, 0);
+        if (irq & 0x1f) {
+            value <<= 16;
+            mask &= 0xffff0000U;
+        } else {
+            mask &= 0xffff;
+        }
+        old_value = *gic_bmp_ptr32(s->espi_edge_trigger, irq & ~0x1f);
+        value = (old_value & ~mask) | (value & mask);
+        *gic_bmp_ptr32(s->espi_edge_trigger, irq & ~0x1f) = value;
+        gicv3_full_update(s);
+        return true;
+    }
+    case GICD_IROUTERnE ... GICD_IROUTERnE + 0x1fff:
+    {
+        uint64_t route;
+        int irq;
+
+        if ((offset - GICD_IROUTERnE) & 3) {
+            return false;
+        }
+        irq = (offset - GICD_IROUTERnE) / 8;
+        if (irq >= s->num_espi) {
+            return true;
+        }
+        route = gicd_read_espi_irouter(s, attrs, irq);
+        route = deposit64(route, (offset & 7) ? 32 : 0, 32, value);
+        gicd_write_espi_irouter(s, attrs, irq, route);
+        return true;
+    }
     case GICD_IROUTER ... GICD_IROUTER + 0x1fdf:
     {
         uint64_t r;
@@ -833,6 +1239,16 @@ static bool gicd_writeq(GICv3State *s, hwaddr offset,
         irq = (offset - GICD_IROUTER) / 8;
         gicd_write_irouter(s, attrs, irq, value);
         return true;
+    case GICD_IROUTERnE ... GICD_IROUTERnE + 0x1fff:
+        if ((offset - GICD_IROUTERnE) & 7) {
+            return false;
+        }
+        irq = (offset - GICD_IROUTERnE) / 8;
+        if (irq >= s->num_espi) {
+            return true;
+        }
+        gicd_write_espi_irouter(s, attrs, irq, value);
+        return true;
     default:
         return false;
     }
@@ -848,6 +1264,13 @@ static bool gicd_readq(GICv3State *s, hwaddr offset,
     case GICD_IROUTER ... GICD_IROUTER + 0x1fdf:
         irq = (offset - GICD_IROUTER) / 8;
         *data = gicd_read_irouter(s, attrs, irq);
+        return true;
+    case GICD_IROUTERnE ... GICD_IROUTERnE + 0x1fff:
+        if ((offset - GICD_IROUTERnE) & 7) {
+            return false;
+        }
+        irq = (offset - GICD_IROUTERnE) / 8;
+        *data = gicd_read_espi_irouter(s, attrs, irq);
         return true;
     default:
         return false;

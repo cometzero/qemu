@@ -69,7 +69,51 @@ static uint32_t gicr_read_bitmap_reg(GICv3CPUState *cs, MemTxAttrs attrs,
     return reg;
 }
 
-static bool vcpu_resident(GICv3CPUState *cs, uint64_t vptaddr)
+static bool gicr_eppi_word_index(GICv3CPUState *cs, hwaddr offset,
+                                 hwaddr base, unsigned int *word)
+{
+    *word = (offset - base) / 4 - 1;
+    return *word < BITS_TO_U32S(cs->gic->num_eppi);
+}
+
+static uint32_t gicr_eppi_group_mask(GICv3CPUState *cs, MemTxAttrs attrs,
+                                     unsigned int word)
+{
+    if (!attrs.secure && !(cs->gic->gicd_ctlr & GICD_CTLR_DS)) {
+        return cs->eppi_group[word];
+    }
+    return UINT32_MAX;
+}
+
+static uint32_t gicr_eppi_read_bitmap(GICv3CPUState *cs, MemTxAttrs attrs,
+                                      uint32_t value, unsigned int word)
+{
+    return value & gicr_eppi_group_mask(cs, attrs, word);
+}
+
+static void gicr_eppi_write_set_bitmap(GICv3CPUState *cs,
+                                       MemTxAttrs attrs, uint32_t *reg,
+                                       uint32_t value, unsigned int word)
+{
+    *reg |= value & gicr_eppi_group_mask(cs, attrs, word);
+    gicv3_redist_update(cs);
+}
+
+static void gicr_eppi_write_clear_bitmap(GICv3CPUState *cs,
+                                         MemTxAttrs attrs, uint32_t *reg,
+                                         uint32_t value, unsigned int word)
+{
+    *reg &= ~(value & gicr_eppi_group_mask(cs, attrs, word));
+    gicv3_redist_update(cs);
+}
+
+static bool vpendbaser_uses_vpeid(GICv3CPUState *cs)
+{
+    return cs->gic->gicv4_1 && cs->gic->rvpeid;
+}
+
+static bool vcpu_resident(GICv3CPUState *cs, uint64_t vptaddr,
+                          uint32_t vpeid)
 {
     /*
      * Return true if a vCPU is resident, which is defined by
@@ -79,7 +123,20 @@ static bool vcpu_resident(GICv3CPUState *cs, uint64_t vptaddr)
     if (!FIELD_EX64(cs->gicr_vpendbaser, GICR_VPENDBASER, VALID)) {
         return false;
     }
+    if (vpendbaser_uses_vpeid(cs)) {
+        return vpeid == FIELD_EX64(cs->gicr_vpendbaser,
+                                   GICR_VPENDBASER_4_1, VPEID);
+    }
     return vptaddr == (cs->gicr_vpendbaser & R_GICR_VPENDBASER_PHYADDR_MASK);
+}
+
+static void gicr_vpendbaser_mark_dirty(GICv3CPUState *cs)
+{
+    if (cs->gic->vpend_valid_dirty &&
+        FIELD_EX64(cs->gicr_vpendbaser, GICR_VPENDBASER, VALID)) {
+        cs->gicr_vpendbaser = FIELD_DP64(cs->gicr_vpendbaser,
+                                         GICR_VPENDBASER, DIRTY, 1);
+    }
 }
 
 /**
@@ -237,6 +294,32 @@ static void gicr_write_ipriorityr(GICv3CPUState *cs, MemTxAttrs attrs, int irq,
     cs->gicr_ipriorityr[irq] = value;
 }
 
+static uint8_t gicr_read_eppi_priority(GICv3CPUState *cs, MemTxAttrs attrs,
+                                       unsigned int irq)
+{
+    uint8_t priority = cs->eppi_priority[irq];
+
+    if (!attrs.secure && !(cs->gic->gicd_ctlr & GICD_CTLR_DS)) {
+        if (!test_bit32(irq, cs->eppi_group)) {
+            return 0;
+        }
+        priority = (priority << 1) & 0xff;
+    }
+    return priority;
+}
+
+static void gicr_write_eppi_priority(GICv3CPUState *cs, MemTxAttrs attrs,
+                                     unsigned int irq, uint8_t value)
+{
+    if (!attrs.secure && !(cs->gic->gicd_ctlr & GICD_CTLR_DS)) {
+        if (!test_bit32(irq, cs->eppi_group)) {
+            return;
+        }
+        value = 0x80 | (value >> 1);
+    }
+    cs->eppi_priority[irq] = value;
+}
+
 static void gicv3_redist_update_vlpi_only(GICv3CPUState *cs)
 {
     uint64_t ptbase, ctbase, idbits;
@@ -247,8 +330,19 @@ static void gicv3_redist_update_vlpi_only(GICv3CPUState *cs)
         return;
     }
 
-    ptbase = cs->gicr_vpendbaser & R_GICR_VPENDBASER_PHYADDR_MASK;
-    ctbase = cs->gicr_vpropbaser & R_GICR_VPROPBASER_PHYADDR_MASK;
+    if (vpendbaser_uses_vpeid(cs)) {
+        ptbase = cs->gicr_vpend_vptaddr;
+        if (!ptbase) {
+            cs->hppvlpi.prio = 0xff;
+            cs->hppvlpi.nmi = false;
+            return;
+        }
+    } else {
+        ptbase = cs->gicr_vpendbaser & R_GICR_VPENDBASER_PHYADDR_MASK;
+    }
+    ctbase = vpendbaser_uses_vpeid(cs) && cs->gicr_vpend_vconfaddr ?
+        cs->gicr_vpend_vconfaddr :
+        cs->gicr_vpropbaser & R_GICR_VPROPBASER_PHYADDR_MASK;
     idbits = FIELD_EX64(cs->gicr_vpropbaser, GICR_VPROPBASER, IDBITS);
 
     update_for_all_lpis(cs, ptbase, ctbase, idbits, true, &cs->hppvlpi);
@@ -266,18 +360,34 @@ static void gicr_write_vpendbaser(GICv3CPUState *cs, uint64_t newval)
     bool oldvalid = FIELD_EX64(cs->gicr_vpendbaser, GICR_VPENDBASER, VALID);
     bool newvalid = FIELD_EX64(newval, GICR_VPENDBASER, VALID);
     bool pendinglast;
+    uint64_t writable_mask;
 
-    /*
-     * The DIRTY bit is read-only and for us is always zero;
-     * other fields are writable.
-     */
-    newval &= R_GICR_VPENDBASER_INNERCACHE_MASK |
-        R_GICR_VPENDBASER_SHAREABILITY_MASK |
-        R_GICR_VPENDBASER_PHYADDR_MASK |
-        R_GICR_VPENDBASER_OUTERCACHE_MASK |
-        R_GICR_VPENDBASER_PENDINGLAST_MASK |
-        R_GICR_VPENDBASER_IDAI_MASK |
-        R_GICR_VPENDBASER_VALID_MASK;
+    if (vpendbaser_uses_vpeid(cs)) {
+        uint32_t vpeid = FIELD_EX64(newval, GICR_VPENDBASER_4_1, VPEID);
+
+        writable_mask = R_GICR_VPENDBASER_4_1_VPEID_MASK |
+            R_GICR_VPENDBASER_4_1_PENDINGLAST_MASK |
+            R_GICR_VPENDBASER_4_1_VALID_MASK;
+        if (vpeid >= (1ULL << cs->gic->vpeid_bits)) {
+            return;
+        }
+    } else {
+        if (newval & (MAKE_64BIT_MASK(0, 7) |
+                      MAKE_64BIT_MASK(12, 4))) {
+            return;
+        }
+        writable_mask = R_GICR_VPENDBASER_INNERCACHE_MASK |
+            R_GICR_VPENDBASER_SHAREABILITY_MASK |
+            R_GICR_VPENDBASER_PHYADDR_MASK |
+            R_GICR_VPENDBASER_OUTERCACHE_MASK |
+            R_GICR_VPENDBASER_PENDINGLAST_MASK |
+            R_GICR_VPENDBASER_IDAI_MASK |
+            R_GICR_VPENDBASER_VALID_MASK;
+    }
+    newval &= writable_mask;
+    if (cs->gic->vpend_valid_dirty && oldvalid && newvalid) {
+        newval |= cs->gicr_vpendbaser & R_GICR_VPENDBASER_DIRTY_MASK;
+    }
 
     if (oldvalid && newvalid) {
         /*
@@ -293,6 +403,8 @@ static void gicr_write_vpendbaser(GICv3CPUState *cs, uint64_t newval)
     }
     if (!oldvalid && !newvalid) {
         cs->gicr_vpendbaser = newval;
+        cs->gicr_vpend_vptaddr = 0;
+        cs->gicr_vpend_vconfaddr = 0;
         return;
     }
 
@@ -312,6 +424,8 @@ static void gicr_write_vpendbaser(GICv3CPUState *cs, uint64_t newval)
          * If we cache info in the IMPDEF area, write it out here.
          */
         pendinglast = cs->hppvlpi.prio != 0xff;
+        cs->gicr_vpend_vptaddr = 0;
+        cs->gicr_vpend_vconfaddr = 0;
     }
 
     newval = FIELD_DP64(newval, GICR_VPENDBASER, PENDINGLAST, pendinglast);
@@ -319,13 +433,30 @@ static void gicr_write_vpendbaser(GICv3CPUState *cs, uint64_t newval)
     gicv3_redist_update_vlpi(cs);
 }
 
+static void gicr_write_lpir(GICv3CPUState *cs, uint64_t value, int level)
+{
+    if (cs->gic->direct_lpi) {
+        gicv3_redist_process_lpi(cs, (uint32_t)value, level);
+    }
+}
+
 static MemTxResult gicr_readb(GICv3CPUState *cs, hwaddr offset,
                               uint64_t *data, MemTxAttrs attrs)
 {
     switch (offset) {
-    case GICR_IPRIORITYR ... GICR_IPRIORITYR + 0x1f:
-        *data = gicr_read_ipriorityr(cs, attrs, offset - GICR_IPRIORITYR);
+    case GICR_IPRIORITYR ... GICR_IPRIORITYR + 0x5f:
+    {
+        unsigned int irq = offset - GICR_IPRIORITYR;
+
+        if (irq < GIC_INTERNAL) {
+            *data = gicr_read_ipriorityr(cs, attrs, irq);
+        } else if (irq - GIC_INTERNAL < cs->gic->num_eppi) {
+            *data = gicr_read_eppi_priority(cs, attrs, irq - GIC_INTERNAL);
+        } else {
+            *data = 0;
+        }
         return MEMTX_OK;
+    }
     default:
         return MEMTX_ERROR;
     }
@@ -335,10 +466,18 @@ static MemTxResult gicr_writeb(GICv3CPUState *cs, hwaddr offset,
                                uint64_t value, MemTxAttrs attrs)
 {
     switch (offset) {
-    case GICR_IPRIORITYR ... GICR_IPRIORITYR + 0x1f:
-        gicr_write_ipriorityr(cs, attrs, offset - GICR_IPRIORITYR, value);
+    case GICR_IPRIORITYR ... GICR_IPRIORITYR + 0x5f:
+    {
+        unsigned int irq = offset - GICR_IPRIORITYR;
+
+        if (irq < GIC_INTERNAL) {
+            gicr_write_ipriorityr(cs, attrs, irq, value);
+        } else if (irq - GIC_INTERNAL < cs->gic->num_eppi) {
+            gicr_write_eppi_priority(cs, attrs, irq - GIC_INTERNAL, value);
+        }
         gicv3_redist_update(cs);
         return MEMTX_OK;
+    }
     default:
         return MEMTX_ERROR;
     }
@@ -388,6 +527,18 @@ static MemTxResult gicr_readl(GICv3CPUState *cs, hwaddr offset,
         }
         *data = cs->gicr_igroupr0;
         return MEMTX_OK;
+    case GICR_IGROUPR0 + 4 ... GICR_IGROUPR0 + 8:
+    {
+        unsigned int word;
+
+        if (!gicr_eppi_word_index(cs, offset, GICR_IGROUPR0, &word) ||
+            (!attrs.secure && !(cs->gic->gicd_ctlr & GICD_CTLR_DS))) {
+            *data = 0;
+        } else {
+            *data = cs->eppi_group[word];
+        }
+        return MEMTX_OK;
+    }
     case GICR_ISENABLER0:
     case GICR_ICENABLER0:
         *data = gicr_read_bitmap_reg(cs, attrs, cs->gicr_ienabler0);
@@ -406,14 +557,54 @@ static MemTxResult gicr_readl(GICv3CPUState *cs, hwaddr offset,
     case GICR_ICACTIVER0:
         *data = gicr_read_bitmap_reg(cs, attrs, cs->gicr_iactiver0);
         return MEMTX_OK;
-    case GICR_IPRIORITYR ... GICR_IPRIORITYR + 0x1f:
+    case GICR_ISENABLER0 + 4 ... GICR_ISENABLER0 + 8:
+    case GICR_ICENABLER0 + 4 ... GICR_ICENABLER0 + 8:
+    case GICR_ISPENDR0 + 4 ... GICR_ISPENDR0 + 8:
+    case GICR_ICPENDR0 + 4 ... GICR_ICPENDR0 + 8:
+    case GICR_ISACTIVER0 + 4 ... GICR_ISACTIVER0 + 8:
+    case GICR_ICACTIVER0 + 4 ... GICR_ICACTIVER0 + 8:
+    {
+        unsigned int word;
+        hwaddr base = offset & ~0x7f;
+        uint32_t value;
+
+        if (!gicr_eppi_word_index(cs, offset, base, &word)) {
+            *data = 0;
+            return MEMTX_OK;
+        }
+        switch (base) {
+        case GICR_ISENABLER0:
+        case GICR_ICENABLER0:
+            value = cs->eppi_enabled[word];
+            break;
+        case GICR_ISPENDR0:
+        case GICR_ICPENDR0:
+            value = cs->eppi_pending[word] |
+                (~cs->eppi_edge_trigger[word] & cs->eppi_level[word]);
+            break;
+        case GICR_ISACTIVER0:
+        case GICR_ICACTIVER0:
+            value = cs->eppi_active[word];
+            break;
+        default:
+            g_assert_not_reached();
+        }
+        *data = gicr_eppi_read_bitmap(cs, attrs, value, word);
+        return MEMTX_OK;
+    }
+    case GICR_IPRIORITYR ... GICR_IPRIORITYR + 0x5f:
     {
         int i, irq = offset - GICR_IPRIORITYR;
         uint32_t value = 0;
 
         for (i = irq + 3; i >= irq; i--) {
             value <<= 8;
-            value |= gicr_read_ipriorityr(cs, attrs, i);
+            if (i < GIC_INTERNAL) {
+                value |= gicr_read_ipriorityr(cs, attrs, i);
+            } else if (i - GIC_INTERNAL < cs->gic->num_eppi) {
+                value |= gicr_read_eppi_priority(cs, attrs,
+                                                 i - GIC_INTERNAL);
+            }
         }
         *data = value;
         return MEMTX_OK;
@@ -436,6 +627,22 @@ static MemTxResult gicr_readl(GICv3CPUState *cs, hwaddr offset,
         *data = value;
         return MEMTX_OK;
     }
+    case GICR_ICFGR0 + 8 ... GICR_ICFGR0 + 20:
+    {
+        unsigned int irq = ((offset - GICR_ICFGR0) / 4 - 2) * 16;
+        unsigned int word = irq / 32;
+        uint32_t value;
+
+        if (irq >= cs->gic->num_eppi) {
+            *data = 0;
+            return MEMTX_OK;
+        }
+        value = cs->eppi_edge_trigger[word] &
+            gicr_eppi_group_mask(cs, attrs, word);
+        value = extract32(value, irq % 32, 16);
+        *data = half_shuffle32(value) << 1;
+        return MEMTX_OK;
+    }
     case GICR_IGRPMODR0:
         if ((cs->gic->gicd_ctlr & GICD_CTLR_DS) || !attrs.secure) {
             /* RAZ/WI if security disabled, or if
@@ -446,6 +653,18 @@ static MemTxResult gicr_readl(GICv3CPUState *cs, hwaddr offset,
         }
         *data = cs->gicr_igrpmodr0;
         return MEMTX_OK;
+    case GICR_IGRPMODR0 + 4 ... GICR_IGRPMODR0 + 8:
+    {
+        unsigned int word;
+
+        if (!gicr_eppi_word_index(cs, offset, GICR_IGRPMODR0, &word) ||
+            (cs->gic->gicd_ctlr & GICD_CTLR_DS) || !attrs.secure) {
+            *data = 0;
+        } else {
+            *data = cs->eppi_grpmod[word];
+        }
+        return MEMTX_OK;
+    }
     case GICR_NSACR:
         if ((cs->gic->gicd_ctlr & GICD_CTLR_DS) || !attrs.secure) {
             /* RAZ/WI if security disabled, or if
@@ -506,6 +725,12 @@ static MemTxResult gicr_writel(GICv3CPUState *cs, hwaddr offset,
     case GICR_STATUSR:
         /* RAZ/WI for our implementation */
         return MEMTX_OK;
+    case GICR_SETLPIR:
+        gicr_write_lpir(cs, value, 1);
+        return MEMTX_OK;
+    case GICR_CLRLPIR:
+        gicr_write_lpir(cs, value, 0);
+        return MEMTX_OK;
     case GICR_WAKER:
         /* Only the ProcessorSleep bit is writable. When the guest sets
          * it, it requests that we transition the channel between the
@@ -543,6 +768,17 @@ static MemTxResult gicr_writel(GICv3CPUState *cs, hwaddr offset,
         cs->gicr_igroupr0 = value;
         gicv3_redist_update(cs);
         return MEMTX_OK;
+    case GICR_IGROUPR0 + 4 ... GICR_IGROUPR0 + 8:
+    {
+        unsigned int word;
+
+        if (gicr_eppi_word_index(cs, offset, GICR_IGROUPR0, &word) &&
+            (attrs.secure || (cs->gic->gicd_ctlr & GICD_CTLR_DS))) {
+            cs->eppi_group[word] = value;
+            gicv3_redist_update(cs);
+        }
+        return MEMTX_OK;
+    }
     case GICR_ISENABLER0:
         gicr_write_set_bitmap_reg(cs, attrs, &cs->gicr_ienabler0, value);
         return MEMTX_OK;
@@ -561,12 +797,54 @@ static MemTxResult gicr_writel(GICv3CPUState *cs, hwaddr offset,
     case GICR_ICACTIVER0:
         gicr_write_clear_bitmap_reg(cs, attrs, &cs->gicr_iactiver0, value);
         return MEMTX_OK;
-    case GICR_IPRIORITYR ... GICR_IPRIORITYR + 0x1f:
+    case GICR_ISENABLER0 + 4 ... GICR_ISENABLER0 + 8:
+    case GICR_ICENABLER0 + 4 ... GICR_ICENABLER0 + 8:
+    case GICR_ISPENDR0 + 4 ... GICR_ISPENDR0 + 8:
+    case GICR_ICPENDR0 + 4 ... GICR_ICPENDR0 + 8:
+    case GICR_ISACTIVER0 + 4 ... GICR_ISACTIVER0 + 8:
+    case GICR_ICACTIVER0 + 4 ... GICR_ICACTIVER0 + 8:
+    {
+        unsigned int word;
+        hwaddr base = offset & ~0x7f;
+        uint32_t *reg;
+
+        if (!gicr_eppi_word_index(cs, offset, base, &word)) {
+            return MEMTX_OK;
+        }
+        switch (base) {
+        case GICR_ISENABLER0:
+        case GICR_ICENABLER0:
+            reg = &cs->eppi_enabled[word];
+            break;
+        case GICR_ISPENDR0:
+        case GICR_ICPENDR0:
+            reg = &cs->eppi_pending[word];
+            break;
+        case GICR_ISACTIVER0:
+        case GICR_ICACTIVER0:
+            reg = &cs->eppi_active[word];
+            break;
+        default:
+            g_assert_not_reached();
+        }
+        if ((base & 0x80) == 0) {
+            gicr_eppi_write_set_bitmap(cs, attrs, reg, value, word);
+        } else {
+            gicr_eppi_write_clear_bitmap(cs, attrs, reg, value, word);
+        }
+        return MEMTX_OK;
+    }
+    case GICR_IPRIORITYR ... GICR_IPRIORITYR + 0x5f:
     {
         int i, irq = offset - GICR_IPRIORITYR;
 
         for (i = irq; i < irq + 4; i++, value >>= 8) {
-            gicr_write_ipriorityr(cs, attrs, i, value);
+            if (i < GIC_INTERNAL) {
+                gicr_write_ipriorityr(cs, attrs, i, value);
+            } else if (i - GIC_INTERNAL < cs->gic->num_eppi) {
+                gicr_write_eppi_priority(cs, attrs, i - GIC_INTERNAL,
+                                         value);
+            }
         }
         gicv3_redist_update(cs);
         return MEMTX_OK;
@@ -597,6 +875,23 @@ static MemTxResult gicr_writel(GICv3CPUState *cs, hwaddr offset,
         gicv3_redist_update(cs);
         return MEMTX_OK;
     }
+    case GICR_ICFGR0 + 8 ... GICR_ICFGR0 + 20:
+    {
+        unsigned int irq = ((offset - GICR_ICFGR0) / 4 - 2) * 16;
+        unsigned int word = irq / 32;
+        uint32_t mask;
+
+        if (irq >= cs->gic->num_eppi) {
+            return MEMTX_OK;
+        }
+        value = half_unshuffle32(value >> 1) << (irq % 32);
+        mask = (0xffffU << (irq % 32)) &
+            gicr_eppi_group_mask(cs, attrs, word);
+        cs->eppi_edge_trigger[word] &= ~mask;
+        cs->eppi_edge_trigger[word] |= value & mask;
+        gicv3_redist_update(cs);
+        return MEMTX_OK;
+    }
     case GICR_IGRPMODR0:
         if ((cs->gic->gicd_ctlr & GICD_CTLR_DS) || !attrs.secure) {
             /* RAZ/WI if security disabled, or if
@@ -607,6 +902,17 @@ static MemTxResult gicr_writel(GICv3CPUState *cs, hwaddr offset,
         cs->gicr_igrpmodr0 = value;
         gicv3_redist_update(cs);
         return MEMTX_OK;
+    case GICR_IGRPMODR0 + 4 ... GICR_IGRPMODR0 + 8:
+    {
+        unsigned int word;
+
+        if (gicr_eppi_word_index(cs, offset, GICR_IGRPMODR0, &word) &&
+            !(cs->gic->gicd_ctlr & GICD_CTLR_DS) && attrs.secure) {
+            cs->eppi_grpmod[word] = value;
+            gicv3_redist_update(cs);
+        }
+        return MEMTX_OK;
+    }
     case GICR_NSACR:
         if ((cs->gic->gicd_ctlr & GICD_CTLR_DS) || !attrs.secure) {
             /* RAZ/WI if security disabled, or if
@@ -685,6 +991,12 @@ static MemTxResult gicr_writell(GICv3CPUState *cs, hwaddr offset,
         return MEMTX_OK;
     case GICR_PENDBASER:
         cs->gicr_pendbaser = value;
+        return MEMTX_OK;
+    case GICR_SETLPIR:
+        gicr_write_lpir(cs, value, 1);
+        return MEMTX_OK;
+    case GICR_CLRLPIR:
+        gicr_write_lpir(cs, value, 0);
         return MEMTX_OK;
     case GICR_TYPER:
         /* RO register, ignore the write */
@@ -1031,12 +1343,24 @@ void gicv3_redist_vlpi_pending(GICv3CPUState *cs, int irq, int level)
      */
     uint64_t vptbase, ctbase;
 
-    vptbase = FIELD_EX64(cs->gicr_vpendbaser, GICR_VPENDBASER, PHYADDR) << 16;
+    if (vpendbaser_uses_vpeid(cs)) {
+        vptbase = cs->gicr_vpend_vptaddr;
+        if (!vptbase) {
+            return;
+        }
+    } else {
+        vptbase = FIELD_EX64(cs->gicr_vpendbaser,
+                             GICR_VPENDBASER, PHYADDR) << 16;
+    }
 
     if (set_pending_table_bit(cs, vptbase, irq, level)) {
+        gicr_vpendbaser_mark_dirty(cs);
         if (level) {
             /* Check whether this vLPI is now the best */
-            ctbase = cs->gicr_vpropbaser & R_GICR_VPROPBASER_PHYADDR_MASK;
+            ctbase = vpendbaser_uses_vpeid(cs) &&
+                cs->gicr_vpend_vconfaddr ?
+                cs->gicr_vpend_vconfaddr :
+                cs->gicr_vpropbaser & R_GICR_VPROPBASER_PHYADDR_MASK;
             update_for_one_lpi(cs, irq, ctbase, true, &cs->hppvlpi);
             gicv3_cpuif_virt_irq_fiq_update(cs);
         } else {
@@ -1049,14 +1373,18 @@ void gicv3_redist_vlpi_pending(GICv3CPUState *cs, int irq, int level)
 }
 
 void gicv3_redist_process_vlpi(GICv3CPUState *cs, int irq, uint64_t vptaddr,
+                               uint64_t vconfaddr, uint32_t vpeid,
                                int doorbell, int level)
 {
     bool bit_changed;
-    bool resident = vcpu_resident(cs, vptaddr);
+    bool resident = vcpu_resident(cs, vptaddr, vpeid);
     uint64_t ctbase;
 
     if (resident) {
         uint32_t idbits = FIELD_EX64(cs->gicr_vpropbaser, GICR_VPROPBASER, IDBITS);
+
+        cs->gicr_vpend_vptaddr = vptaddr;
+        cs->gicr_vpend_vconfaddr = vconfaddr;
         if (irq >= (1ULL << (idbits + 1))) {
             return;
         }
@@ -1064,9 +1392,12 @@ void gicv3_redist_process_vlpi(GICv3CPUState *cs, int irq, uint64_t vptaddr,
 
     bit_changed = set_pending_table_bit(cs, vptaddr, irq, level);
     if (resident && bit_changed) {
+        gicr_vpendbaser_mark_dirty(cs);
         if (level) {
             /* Check whether this vLPI is now the best */
-            ctbase = cs->gicr_vpropbaser & R_GICR_VPROPBASER_PHYADDR_MASK;
+            ctbase = cs->gicr_vpend_vconfaddr ?
+                cs->gicr_vpend_vconfaddr :
+                cs->gicr_vpropbaser & R_GICR_VPROPBASER_PHYADDR_MASK;
             update_for_one_lpi(cs, irq, ctbase, true, &cs->hppvlpi);
             gicv3_cpuif_virt_irq_fiq_update(cs);
         } else {
@@ -1085,9 +1416,12 @@ void gicv3_redist_process_vlpi(GICv3CPUState *cs, int irq, uint64_t vptaddr,
 }
 
 void gicv3_redist_mov_vlpi(GICv3CPUState *src, uint64_t src_vptaddr,
-                           GICv3CPUState *dest, uint64_t dest_vptaddr,
-                           int irq, int doorbell)
+                           uint32_t src_vpeid, GICv3CPUState *dest,
+                           uint64_t dest_vptaddr, uint64_t dest_vconfaddr,
+                           uint32_t dest_vpeid, int irq, int doorbell)
 {
+    bool src_resident;
+
     /*
      * Move the specified vLPI's pending state from the source redistributor
      * to the destination.
@@ -1096,7 +1430,11 @@ void gicv3_redist_mov_vlpi(GICv3CPUState *src, uint64_t src_vptaddr,
         /* Not pending on source, nothing to do */
         return;
     }
-    if (vcpu_resident(src, src_vptaddr) && irq == src->hppvlpi.irq) {
+    src_resident = vcpu_resident(src, src_vptaddr, src_vpeid);
+    if (src_resident) {
+        gicr_vpendbaser_mark_dirty(src);
+    }
+    if (src_resident && irq == src->hppvlpi.irq) {
         /*
          * Update src's cached highest-priority pending vLPI if we just made
          * it not-pending
@@ -1107,12 +1445,14 @@ void gicv3_redist_mov_vlpi(GICv3CPUState *src, uint64_t src_vptaddr,
      * Mark the vLPI pending on the destination (ringing the doorbell
      * if the vCPU isn't resident)
      */
-    gicv3_redist_process_vlpi(dest, irq, dest_vptaddr, doorbell, irq);
+    gicv3_redist_process_vlpi(dest, irq, dest_vptaddr, dest_vconfaddr,
+                              dest_vpeid, doorbell, irq);
 }
 
-void gicv3_redist_vinvall(GICv3CPUState *cs, uint64_t vptaddr)
+void gicv3_redist_vinvall(GICv3CPUState *cs, uint64_t vptaddr,
+                          uint32_t vpeid)
 {
-    if (!vcpu_resident(cs, vptaddr)) {
+    if (!vcpu_resident(cs, vptaddr, vpeid)) {
         /* We don't have anything cached if the vCPU isn't resident */
         return;
     }
@@ -1121,7 +1461,8 @@ void gicv3_redist_vinvall(GICv3CPUState *cs, uint64_t vptaddr)
     gicv3_redist_update_vlpi(cs);
 }
 
-void gicv3_redist_inv_vlpi(GICv3CPUState *cs, int irq, uint64_t vptaddr)
+void gicv3_redist_inv_vlpi(GICv3CPUState *cs, int irq, uint64_t vptaddr,
+                           uint32_t vpeid)
 {
     /*
      * The only cached information for LPIs we have is the HPPLPI.
@@ -1129,7 +1470,7 @@ void gicv3_redist_inv_vlpi(GICv3CPUState *cs, int irq, uint64_t vptaddr)
      * to do a full rescan of the pending table, but until we find
      * this is a performance issue, just always recalculate.
      */
-    gicv3_redist_vinvall(cs, vptaddr);
+    gicv3_redist_vinvall(cs, vptaddr, vpeid);
 }
 
 void gicv3_redist_set_irq(GICv3CPUState *cs, int irq, int level)
