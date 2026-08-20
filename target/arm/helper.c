@@ -4745,10 +4745,52 @@ static void disr_write(CPUARMState *env, const ARMCPRegInfo *ri, uint64_t val)
 }
 
 #define RAS_ERROR_RECORD_COUNT 2
+#define ERXPFGCTL_EN BIT_ULL(31)
+#define ERXPFGCTL_CE BIT_ULL(6)
+#define ERXPFGCTL_DE BIT_ULL(5)
+#define ERXPFGCTL_UC BIT_ULL(1)
+#define ERXSTATUS_V BIT_ULL(30)
+#define ERXSTATUS_UE BIT_ULL(29)
+#define ERXSTATUS_CE BIT_ULL(25)
+#define ERXSTATUS_DE BIT_ULL(23)
+
+static void set_ras_irq(qemu_irq irq, int level)
+{
+    bool acquired_bql = !bql_locked();
+
+    if (acquired_bql) {
+        bql_lock();
+    }
+    qemu_set_irq(irq, level);
+    if (acquired_bql) {
+        bql_unlock();
+    }
+}
 
 static unsigned int selected_ras_error_record(CPUARMState *env)
 {
     return env->cp15.errselr_el1 % RAS_ERROR_RECORD_COUNT;
+}
+
+static void inject_ras_error(CPUARMState *env, unsigned int idx,
+                             uint64_t control)
+{
+    ARMCPU *cpu = env_archcpu(env);
+
+    if (!(control & ERXPFGCTL_EN)) {
+        return;
+    }
+
+    if (control & ERXPFGCTL_UC) {
+        env->cp15.erxstatus_el1[idx] = ERXSTATUS_V | ERXSTATUS_UE;
+        set_ras_irq(cpu->ras_uncontainable_interrupt, 1);
+    } else if (control & ERXPFGCTL_DE) {
+        env->cp15.erxstatus_el1[idx] = ERXSTATUS_V | ERXSTATUS_DE;
+        set_ras_irq(cpu->ras_fault_interrupt, 1);
+    } else if (control & ERXPFGCTL_CE) {
+        env->cp15.erxstatus_el1[idx] = ERXSTATUS_V | ERXSTATUS_CE;
+        set_ras_irq(cpu->ras_fault_interrupt, 1);
+    }
 }
 
 static uint64_t erx_read(CPUARMState *env, const ARMCPRegInfo *ri)
@@ -4802,14 +4844,20 @@ static void erx_write(CPUARMState *env, const ARMCPRegInfo *ri, uint64_t val)
         case 1: /* ERXCTLR_EL1 */
             env->cp15.erxctlr_el1[idx] = val;
             return;
-        case 2: /* ERXSTATUS_EL1 */
+        case 2: { /* ERXSTATUS_EL1 */
+            bool was_valid = env->cp15.erxstatus_el1[idx] & ERXSTATUS_V;
             env->cp15.erxstatus_el1[idx] &= ~val;
+            if (was_valid && !(env->cp15.erxstatus_el1[idx] & ERXSTATUS_V)) {
+                set_ras_irq(env_archcpu(env)->ras_fault_interrupt, 0);
+            }
             return;
+        }
         case 3: /* ERXADDR_EL1 */
             env->cp15.erxaddr_el1[idx] = val;
             return;
         case 5: /* ERXPFGCTL_EL1 */
             env->cp15.erxpfgctl_el1[idx] = val;
+            inject_ras_error(env, idx, val);
             return;
         case 6: /* ERXPFGCDN_EL1 */
             env->cp15.erxpfgcdn_el1[idx] = val;
@@ -4834,9 +4882,8 @@ static void erx_write(CPUARMState *env, const ARMCPRegInfo *ri, uint64_t val)
 }
 
 /*
- * Minimal RAS implementation with two quiescent Error Records.  This is enough
- * for platform firmware that enables CPU-local RAS reporting and probes for
- * pending errors without modelling actual error injection.
+ * Minimal RAS implementation with two Error Records and pseudo-fault
+ * generation for correctable, deferred and uncontainable CPU errors.
  */
 static const ARMCPRegInfo minimal_ras_reginfo[] = {
     { .name = "DISR_EL1", .state = ARM_CP_STATE_BOTH,

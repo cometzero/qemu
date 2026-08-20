@@ -989,6 +989,8 @@ struct ArchCPU {
     qemu_irq gicv3_maintenance_interrupt;
     /* GPIO output for the PMU interrupt */
     qemu_irq pmu_interrupt;
+    qemu_irq ras_fault_interrupt;
+    qemu_irq ras_uncontainable_interrupt;
 
     /* MemoryRegion to use for secure physical accesses */
     MemoryRegion *secure_memory;

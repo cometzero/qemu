@@ -1146,6 +1146,10 @@ static void arm_cpu_initfn(Object *obj)
                              "gicv3-maintenance-interrupt", 1);
     qdev_init_gpio_out_named(DEVICE(cpu), &cpu->pmu_interrupt,
                              "pmu-interrupt", 1);
+    qdev_init_gpio_out_named(DEVICE(cpu), &cpu->ras_fault_interrupt,
+                             "ras-fault-interrupt", 1);
+    qdev_init_gpio_out_named(DEVICE(cpu), &cpu->ras_uncontainable_interrupt,
+                             "ras-uncontainable-interrupt", 1);
 #endif
 
     /* DTB consumers generally don't in fact care what the 'compatible'
