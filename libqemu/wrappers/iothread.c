@@ -31,3 +31,8 @@ void libqemu_mutex_unlock_iothread(void)
 {
     bql_unlock();
 }
+
+int libqemu_mutex_iothread_locked(void)
+{
+    return bql_locked();
+}
