@@ -204,6 +204,7 @@
 #include "system/system.h"
 #include "system/block-backend.h"
 #include "system/hostmem.h"
+#include "hw/core/qdev-properties-system.h"
 #include "hw/pci/msix.h"
 #include "hw/pci/pcie_sriov.h"
 #include "system/spdm-socket.h"
@@ -8962,6 +8963,8 @@ static bool nvme_init_pci(NvmeCtrl *n, PCIDevice *pci_dev, Error **errp)
     pci_config_set_class(pci_conf, PCI_CLASS_STORAGE_EXPRESS);
     nvme_add_pm_capability(pci_dev, 0x60);
     pcie_endpoint_cap_init(pci_dev, 0x80);
+    pcie_cap_fill_link_ep_usp(pci_dev, n->params.x_width,
+                              n->params.x_speed, false);
     pcie_cap_flr_init(pci_dev);
     if (n->params.sriov_max_vfs) {
         pcie_ari_init(pci_dev, 0x100);
@@ -9421,6 +9424,10 @@ static const Property nvme_props[] = {
     DEFINE_PROP_UINT16("atomic.awun", NvmeCtrl, params.atomic_awun, 0),
     DEFINE_PROP_UINT16("atomic.awupf", NvmeCtrl, params.atomic_awupf, 0),
     DEFINE_PROP_BOOL("ocp", NvmeCtrl, params.ocp, false),
+    DEFINE_PROP_PCIE_LINK_SPEED("x-speed", NvmeCtrl, params.x_speed,
+                                PCIE_LINK_SPEED_2_5),
+    DEFINE_PROP_PCIE_LINK_WIDTH("x-width", NvmeCtrl, params.x_width,
+                                PCIE_LINK_WIDTH_1),
 };
 
 static void nvme_get_smart_warning(Object *obj, Visitor *v, const char *name,

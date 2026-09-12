@@ -564,6 +564,8 @@ typedef struct NvmeParams {
     uint32_t  sriov_max_vi_per_vf;
     bool     msix_exclusive_bar;
     bool     ocp;
+    PCIExpLinkSpeed x_speed;
+    PCIExpLinkWidth x_width;
 
     struct {
         bool mem;
