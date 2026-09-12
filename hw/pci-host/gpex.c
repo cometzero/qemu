@@ -37,6 +37,7 @@
 #include "hw/core/qdev-properties.h"
 #include "migration/vmstate.h"
 #include "qemu/module.h"
+#include "qemu/rcu.h"
 
 /****************************************************************************
  * GPEX host
@@ -46,6 +47,15 @@ struct GPEXIrq {
     qemu_irq irq;
     int irq_num;
 };
+
+typedef struct GPEXRequesterSpace {
+    struct rcu_head rcu;
+    GPEXHost *host;
+    PCIBus *bus;
+    int devfn;
+    MemoryRegion memory;
+    AddressSpace address_space;
+} GPEXRequesterSpace;
 
 static void gpex_set_irq(void *opaque, int irq_num, int level)
 {
@@ -87,15 +97,107 @@ static int gpex_swizzle_map_irq_fn(PCIDevice *pci_dev, int pin)
     return (PCI_SLOT(pci_dev->devfn) + pin) % bus->nirq;
 }
 
-static AddressSpace * gpex_host_iommu_fn(PCIBus *bus, void *opaque, int devfn)
+static MemTxAttrs gpex_requester_attrs(GPEXRequesterSpace *space,
+                                       MemTxAttrs attrs)
 {
-    /*
-     * We return an address space, but in practical, we'll only use
-     * the root memory region.
-     */
+    attrs.requester_id = PCI_BUILD_BDF(pci_bus_num(space->bus), space->devfn);
+    attrs.unspecified = false;
+    return attrs;
+}
+
+static MemTxResult gpex_requester_read(void *opaque, hwaddr addr,
+                                       uint64_t *data, unsigned size,
+                                       MemTxAttrs attrs)
+{
+    GPEXRequesterSpace *space = opaque;
+    uint8_t buf[8] = { 0 };
+    MemTxResult result;
+
+    result = address_space_read(space->host->bus_master_as, addr,
+                                gpex_requester_attrs(space, attrs), buf, size);
+    *data = ldn_le_p(buf, size);
+    return result;
+}
+
+static MemTxResult gpex_requester_write(void *opaque, hwaddr addr,
+                                        uint64_t data, unsigned size,
+                                        MemTxAttrs attrs)
+{
+    GPEXRequesterSpace *space = opaque;
+    uint8_t buf[8];
+
+    stn_le_p(buf, size, data);
+    return address_space_write(space->host->bus_master_as, addr,
+                               gpex_requester_attrs(space, attrs), buf, size);
+}
+
+static const MemoryRegionOps gpex_requester_ops = {
+    .read_with_attrs = gpex_requester_read,
+    .write_with_attrs = gpex_requester_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid = {
+        .min_access_size = 1,
+        .max_access_size = 8,
+        .unaligned = true,
+    },
+    .impl = {
+        .min_access_size = 1,
+        .max_access_size = 8,
+        .unaligned = true,
+    },
+};
+
+static void gpex_requester_space_free_rcu(GPEXRequesterSpace *space)
+{
+    object_unparent(OBJECT(&space->memory));
+    g_free(space);
+}
+
+static void gpex_requester_space_destroy(gpointer data)
+{
+    GPEXRequesterSpace *space = data;
+
+    address_space_destroy(&space->address_space);
+    /* RCU callbacks run in registration order, after AddressSpace teardown. */
+    call_rcu(space, gpex_requester_space_free_rcu, rcu);
+}
+
+static AddressSpace *gpex_host_iommu_fn(PCIBus *bus, void *opaque, int devfn)
+{
     GPEXHost *s = GPEX_HOST(opaque);
+
+    if (s->pci_requester_id) {
+        for (guint i = 0; i < s->requester_spaces->len; i++) {
+            GPEXRequesterSpace *space =
+                g_ptr_array_index(s->requester_spaces, i);
+
+            if (space->bus == bus && space->devfn == devfn) {
+                return &space->address_space;
+            }
+        }
+
+        GPEXRequesterSpace *space = g_new0(GPEXRequesterSpace, 1);
+        g_autofree char *name =
+            g_strdup_printf("gpex-requester-%p-%02x", bus, devfn);
+
+        space->host = s;
+        space->bus = bus;
+        space->devfn = devfn;
+        memory_region_init_io(&space->memory, OBJECT(s), &gpex_requester_ops,
+                              space, name, UINT64_MAX);
+        /* A forwarding proxy can be entered during another GPEX access. */
+        space->memory.disable_reentrancy_guard = true;
+        address_space_init(&space->address_space, &space->memory, name);
+        g_ptr_array_add(s->requester_spaces, space);
+        return &space->address_space;
+    }
+
     return s->bus_master_as;
 }
+
+static const PCIIOMMUOps gpex_iommu_ops = {
+    .get_address_space = gpex_host_iommu_fn,
+};
 
 static void gpex_host_realize(DeviceState *dev, Error **errp)
 {
@@ -166,9 +268,9 @@ static void gpex_host_realize(DeviceState *dev, Error **errp)
     if (s->bus_master) {
         s->bus_master_as = g_new0(AddressSpace, 1);
         address_space_init(s->bus_master_as, s->bus_master, "gpex-host-bus-master-as");
-        PCIIOMMUOps *ops = g_malloc0(sizeof(*ops));
-        ops->get_address_space = gpex_host_iommu_fn;
-        pci_setup_iommu(pci->bus, ops, (void *) s);
+        s->requester_spaces =
+            g_ptr_array_new_with_free_func(gpex_requester_space_destroy);
+        pci_setup_iommu(pci->bus, &gpex_iommu_ops, s);
     }
 
     pci_bus_set_route_irq_fn(pci->bus, gpex_route_intx_pin_to_irq);
@@ -179,6 +281,8 @@ static void gpex_host_unrealize(DeviceState *dev)
 {
     GPEXHost *s = GPEX_HOST(dev);
 
+    g_clear_pointer(&s->requester_spaces, g_ptr_array_unref);
+    g_clear_pointer(&s->bus_master_as, address_space_destroy_free);
     g_free(s->irq);
 }
 
@@ -196,7 +300,9 @@ static const Property gpex_host_properties[] = {
     DEFINE_PROP_BOOL("allow-unmapped-accesses", GPEXHost,
                      allow_unmapped_accesses, true),
     /* Override the default Address Space when defined for master accesses */
-    DEFINE_PROP_LINK("bus-master", GPEXHost, bus_master, TYPE_MEMORY_REGION, MemoryRegion *),
+    DEFINE_PROP_LINK("bus-master", GPEXHost, bus_master, TYPE_MEMORY_REGION,
+                     MemoryRegion *),
+    DEFINE_PROP_BOOL("x-pci-requester-id", GPEXHost, pci_requester_id, false),
     DEFINE_PROP_UINT64(PCI_HOST_ECAM_BASE, GPEXHost, gpex_cfg.ecam.base, 0),
     DEFINE_PROP_SIZE(PCI_HOST_ECAM_SIZE, GPEXHost, gpex_cfg.ecam.size, 0),
     DEFINE_PROP_UINT64(PCI_HOST_PIO_BASE, GPEXHost, gpex_cfg.pio.base, 0),

@@ -71,6 +71,8 @@ struct GPEXHost {
      */
     MemoryRegion *bus_master;
     AddressSpace *bus_master_as;
+    bool pci_requester_id;
+    GPtrArray *requester_spaces;
 
     struct GPEXConfig gpex_cfg;
 };
