@@ -528,6 +528,24 @@ static const VMStateDescription vmstate_event = {
     }
 };
 
+static bool wfe_needed(void *opaque)
+{
+    ARMCPU *cpu = opaque;
+
+    return cpu->env.halted_on_wfe;
+}
+
+static const VMStateDescription vmstate_wfe = {
+    .name = "cpu/wfe",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .needed = wfe_needed,
+    .fields = (const VMStateField[]) {
+        VMSTATE_BOOL(env.halted_on_wfe, ARMCPU),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static const VMStateDescription vmstate_m = {
     .name = "cpu/m",
     .version_id = 4,
@@ -1310,6 +1328,7 @@ const VMStateDescription vmstate_arm_cpu = {
         &vmstate_syndrome64,
         &vmstate_pstate64,
         &vmstate_event,
+        &vmstate_wfe,
         NULL
     }
 };

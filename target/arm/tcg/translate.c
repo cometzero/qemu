@@ -3266,7 +3266,8 @@ static bool trans_WFE(DisasContext *s, arg_WFE *a)
      * For other profiles, we currently treat this as a NOP or yield,
      * to preserve existing performance characteristics.
      */
-    if (!(tb_cflags(s->base.tb) & CF_PARALLEL)) {
+    if (arm_dc_feature(s, ARM_FEATURE_M) ||
+        !(tb_cflags(s->base.tb) & CF_PARALLEL)) {
         gen_update_pc(s, curr_insn_len(s));
         s->base.is_jmp = DISAS_WFE;
     }

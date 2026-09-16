@@ -56,6 +56,11 @@ struct LibQemuContext {
     } cpu_end_of_loop_cb;
 
     struct {
+        LibQemuCpuExecEntryFn cb;
+        void *opaque;
+    } cpu_exec_entry_cb;
+
+    struct {
         LibQemuCpuPcEntryFn cb;
         void *opaque;
     } cpu_pc_entry_cb;
@@ -234,6 +239,7 @@ void libqemu_shutdown(void)
     g_ptr_array_free(threads, true);
 
     context.cpu_end_of_loop_cb.cb = NULL;
+    context.cpu_exec_entry_cb.cb = NULL;
     context.cpu_pc_entry_cb.cb = NULL;
     context.cpu_kick_cb.cb = NULL;
     context.vm_state_cb.cb = NULL;
@@ -247,6 +253,20 @@ void libqemu_set_cpu_end_of_loop_cb(LibQemuCpuEndOfLoopFn cb, void *opaque)
 {
     context.cpu_end_of_loop_cb.cb = cb;
     context.cpu_end_of_loop_cb.opaque = opaque;
+}
+
+void libqemu_set_cpu_exec_entry_cb(LibQemuCpuExecEntryFn cb, void *opaque)
+{
+    context.cpu_exec_entry_cb.cb = cb;
+    context.cpu_exec_entry_cb.opaque = opaque;
+}
+
+void libqemu_cpu_exec_entry_cb(CPUState *cpu)
+{
+    if (!libqemu_shutdown_requested() && context.cpu_exec_entry_cb.cb) {
+        context.cpu_exec_entry_cb.cb((QemuObject *)cpu,
+                                    context.cpu_exec_entry_cb.opaque);
+    }
 }
 
 void libqemu_set_cpu_pc_entry_cb(LibQemuCpuPcEntryFn cb, void *opaque)

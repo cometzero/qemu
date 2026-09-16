@@ -97,6 +97,14 @@ static void *mttcg_cpu_thread_fn(void *arg)
     do {
         qemu_process_cpu_events(cpu);
 
+#ifdef CONFIG_LIBQEMU
+        if (cpu_can_run(cpu)) {
+            /* Queued work can make a CPU runnable without a sleep/resume
+             * notification. Let the embedding scheduler grant execution;
+             * the check below also honours a pause requested by this hook. */
+            libqemu_cpu_exec_entry_cb(cpu);
+        }
+#endif
         if (cpu_can_run(cpu)) {
             int r;
             bql_unlock();

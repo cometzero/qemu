@@ -145,7 +145,7 @@ static bool arm_cpu_has_work(CPUState *cs)
     ARMCPU *cpu = ARM_CPU(cs);
 
     if (arm_feature(&cpu->env, ARM_FEATURE_M)) {
-        if (cpu->env.event_register) {
+        if (cpu->env.halted_on_wfe && cpu->env.event_register) {
             return true;
         }
     }

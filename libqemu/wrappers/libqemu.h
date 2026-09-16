@@ -28,6 +28,7 @@ typedef struct IOMMUMemoryRegion IOMMUMemoryRegion;
 typedef struct IOMMUTLBEntry IOMMUTLBEntry;
 
 typedef void (*LibQemuCpuEndOfLoopFn)(QemuObject *cpu, void *opaque);
+typedef void (*LibQemuCpuExecEntryFn)(QemuObject *cpu, void *opaque);
 typedef bool (*LibQemuCpuPcEntryFn)(QemuObject *cpu, uint64_t pc, void *opaque);
 typedef void (*LibQemuCpuKickFn)(QemuObject *cpu, void *opaque);
 typedef void (*LibQemuVmStateFn)(bool running, void *opaque);
@@ -39,6 +40,7 @@ typedef IOMMUTLBEntry (*LibQemuIOMMUTranslateFn)(IOMMUMemoryRegion *mr,
                                                 int iommu_idx);
 
 void libqemu_set_cpu_end_of_loop_cb(LibQemuCpuEndOfLoopFn cb, void *opaque);
+void libqemu_set_cpu_exec_entry_cb(LibQemuCpuExecEntryFn cb, void *opaque);
 void libqemu_set_cpu_pc_entry_cb(LibQemuCpuPcEntryFn cb, void *opaque);
 void libqemu_add_cpu_pc_entry_watch(uint64_t pc);
 void libqemu_clear_cpu_pc_entry_watches(void);

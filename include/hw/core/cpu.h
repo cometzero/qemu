@@ -516,6 +516,13 @@ struct CPUState {
     struct QemuThread *thread;
     Coroutine *coroutine;
     CPUCoroutineYieldInfo coroutine_yield_info;
+#ifdef CONFIG_LIBQEMU
+    /*
+     * Odd while embedding reset is held; changed at both reset boundaries.
+     * BQL serializes writes, plugin request producers read it atomically.
+     */
+    unsigned long libqemu_reset_epoch;
+#endif
 #ifdef _WIN32
     QemuSemaphore sem;
 #endif
