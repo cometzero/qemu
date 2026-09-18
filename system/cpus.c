@@ -510,13 +510,11 @@ void cpus_kick_thread(CPUState *cpu)
 
 void qemu_cpu_kick(CPUState *cpu)
 {
+    qemu_cond_broadcast(cpu->halt_cond);
+
 #ifdef CONFIG_LIBQEMU
-    /* Reserve co-simulation wake time before the host vCPU can acknowledge
-     * this kick. Otherwise an idle/resume callback can overtake the bridge. */
     libqemu_cpu_kick_cb(cpu);
 #endif
-
-    qemu_cond_broadcast(cpu->halt_cond);
 
     if (cpus_accel->kick_vcpu_thread) {
         cpus_accel->kick_vcpu_thread(cpu);
@@ -934,3 +932,4 @@ void qmp_inject_nmi(Error **errp)
 {
     nmi_monitor_handle(monitor_get_cpu_index(monitor_cur()), errp);
 }
+

@@ -536,7 +536,3 @@ ExportedFct(
 )
 ExportedFct('fw_cfg_find', 'FWCfgState *', [])
 ExportedFct('fw_cfg_set_dma_as', 'void', ['FWCfgState *', 'AddressSpace *'])
-
-# Append new exports to retain the offsets of existing table entries.
-ExportedFct('set_cpu_exec_entry_cb', 'void', [ 'LibQemuCpuExecEntryFn', 'void *' ],
-        priv = 'libqemu_set_cpu_exec_entry_cb')

@@ -296,12 +296,6 @@ static void *rr_cpu_thread_fn(void *arg)
             qemu_clock_enable(QEMU_CLOCK_VIRTUAL,
                               (cpu->singlestep_enabled & SSTEP_NOTIMER) == 0);
 
-#ifdef CONFIG_LIBQEMU
-            if (cpu_can_run(cpu)) {
-                libqemu_cpu_exec_entry_cb(cpu);
-            }
-#endif
-            /* The embedding scheduler may have requested a pause. */
             if (cpu_can_run(cpu)) {
                 int r;
 

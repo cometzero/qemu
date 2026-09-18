@@ -139,21 +139,6 @@ void libqemu_cpu_register_thread(Object *obj)
 void libqemu_cpu_reset(Object *obj, bool reset)
 {
     CPUState *cpu = CPU(obj);
-    bool acquire_bql = !bql_locked();
-    unsigned long epoch;
-
-    if (acquire_bql) {
-        bql_lock();
-    }
-    epoch = qatomic_read(&cpu->libqemu_reset_epoch);
-
-    /*
-     * Invalidate queued scheduler grants on assertion and release. They
-     * must never release an architectural reset or survive its boundary.
-     */
-    if ((bool)(epoch & 1) != reset) {
-        qatomic_store_release(&cpu->libqemu_reset_epoch, epoch + 1);
-    }
     if (reset) {
         cpu_pause(cpu);
         cpu_reset(cpu);
@@ -175,9 +160,6 @@ void libqemu_cpu_reset(Object *obj, bool reset)
         qemu_cond_broadcast(cpu->halt_cond);
     } else {
         cpu_resume(cpu);
-    }
-    if (acquire_bql) {
-        bql_unlock();
     }
 }
 

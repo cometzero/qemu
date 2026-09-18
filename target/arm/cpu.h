@@ -775,8 +775,6 @@ typedef struct CPUArchState {
      * WFE/SEV handling is currently implemented only for M-profile.
      */
     bool event_register;
-    /* Events wake an M-profile WFE, but not a WFI. */
-    bool halted_on_wfe;
 
     struct {
         uint32_t pmcr;

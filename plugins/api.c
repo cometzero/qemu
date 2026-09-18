@@ -38,7 +38,6 @@
 #include "qemu/osdep.h"
 #include "qemu/main-loop.h"
 #include "qemu/plugin.h"
-#include "system/runstate.h"
 #include "qemu/log.h"
 #include "system/memory.h"
 #include "tcg/tcg.h"
@@ -394,58 +393,19 @@ int qemu_plugin_num_vcpus(void)
 }
 
 
-static void plugin_cpu_set_paused(CPUState *cpu, run_on_cpu_data data)
-{
-    bool paused = data.host_ulong & 1;
-#ifdef CONFIG_LIBQEMU
-    unsigned long epoch = qatomic_read(&cpu->libqemu_reset_epoch);
-
-    if ((epoch & 1) || (data.host_ulong & ~1UL) != epoch) {
-        return;
-    }
-#endif
-    /*
-     * CPU work runs with BQL held, serialized with native stop acknowledgement.
-     * Both operations use this queue: a direct resume must not overtake an
-     * earlier queued pause, including requests made by the vCPU itself.
-     */
-    if (paused) {
-        cpu_pause(cpu);
-    } else if (runstate_is_running()) {
-        /* Scheduler grants cannot override a VM/debugger stop. */
-        cpu_resume(cpu);
-    }
-}
-
-static void plugin_cpu_queue_pause(unsigned int vcpu_index, bool paused)
-{
-    CPUState *cpu = qemu_get_cpu(vcpu_index);
-    unsigned long request = paused;
-
-    g_assert(cpu);
-#ifdef CONFIG_LIBQEMU
-    unsigned long epoch = qatomic_load_acquire(&cpu->libqemu_reset_epoch);
-
-    if (epoch & 1) {
-        return;
-    }
-    /*
-     * An unheld epoch is even: its low bit carries the operation without
-     * allocating a payload that discarded CPU work would not free.
-     */
-    request |= epoch;
-#endif
-    async_run_on_cpu(cpu, plugin_cpu_set_paused, RUN_ON_CPU_HOST_ULONG(request));
-}
-
 void qemu_plugin_cpu_request_pause(unsigned int vcpu_index)
 {
-    plugin_cpu_queue_pause(vcpu_index, true);
+    CPUState *cpu = qemu_get_cpu(vcpu_index);
+    g_assert(cpu);
+    cpu->stop = true;
+    qemu_cpu_kick(cpu);
 }
 
 void qemu_plugin_cpu_resume(unsigned int vcpu_index)
 {
-    plugin_cpu_queue_pause(vcpu_index, false);
+    CPUState *cpu = qemu_get_cpu(vcpu_index);
+    g_assert(cpu);
+    cpu_resume(cpu);
 }
 
 void qemu_plugin_bql_lock(void)
@@ -759,3 +719,4 @@ uint64_t qemu_plugin_u64_sum(qemu_plugin_u64 entry)
     }
     return total;
 }
+
