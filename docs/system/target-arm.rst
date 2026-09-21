@@ -71,6 +71,7 @@ Board-specific documentation
 .. toctree::
    :maxdepth: 1
 
+   arm/apollo-qvp
    arm/max78000
    arm/integratorcp
    arm/mps2

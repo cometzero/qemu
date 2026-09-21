@@ -1,3 +1,16 @@
+config APOLLO_QVP
+    bool
+    default y
+    depends on AARCH64 && TCG
+    select ARM_GIC
+    select DEVICE_TREE
+    select PL011
+    select PL031
+    select VIRTIO_MMIO
+    imply VIRTIO_BLK
+    imply VIRTIO_NET
+    imply VIRTIO_RNG
+
 config ARM_VIRT
     bool
     default y
