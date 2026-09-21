@@ -26,6 +26,45 @@
 #include "arm-powerctl.h"
 #include "target/arm/multiprocessing.h"
 #include "target/arm/trace.h"
+#include "system/address-spaces.h"
+
+/*
+ * Optional board-owned synchronous SMCCC service. PSCI remains implemented
+ * below; the board sees only otherwise unsupported calls. No guest pointers
+ * are dereferenced here. A zero address preserves the normal PSCI fallback.
+ */
+static int32_t arm_linux_smc_stub(ARMCPU *cpu, const uint64_t param[4])
+{
+    AddressSpace *as;
+    MemTxResult result;
+    uint64_t base = cpu->linux_smc_stub_address;
+    uint64_t value;
+    unsigned int i;
+
+    if (!base || cpu->psci_conduit != QEMU_PSCI_CONDUIT_SMC ||
+        CPU(cpu)->cpu_index < 0 || CPU(cpu)->cpu_index >= 16 ||
+        base > UINT64_MAX - 0x400) {
+        return QEMU_PSCI_RET_NOT_SUPPORTED;
+    }
+    /* Independent request banks prevent interleaving across MTTCG CPUs. */
+    base += CPU(cpu)->cpu_index * 0x40;
+
+    as = cpu_get_address_space(CPU(cpu), ARMASIdx_NS);
+    for (i = 0; i < 4; i++) {
+        address_space_stq_le(as, base + i * 8, param[i],
+                             MEMTXATTRS_UNSPECIFIED, &result);
+        if (result != MEMTX_OK) {
+            return QEMU_PSCI_RET_NOT_SUPPORTED;
+        }
+    }
+    address_space_stq_le(as, base + 0x20, 1, MEMTXATTRS_UNSPECIFIED, &result);
+    if (result != MEMTX_OK) {
+        return QEMU_PSCI_RET_NOT_SUPPORTED;
+    }
+    value = address_space_ldq_le(as, base + 0x28,
+                                MEMTXATTRS_UNSPECIFIED, &result);
+    return result == MEMTX_OK ? (int32_t)value : QEMU_PSCI_RET_NOT_SUPPORTED;
+}
 
 bool arm_is_psci_call(ARMCPU *cpu, int excp_type)
 {
@@ -205,8 +244,10 @@ void arm_handle_psci_call(ARMCPU *cpu)
         break;
     case QEMU_PSCI_0_1_FN_MIGRATE:
     case QEMU_PSCI_0_2_FN_MIGRATE:
-    default:
         ret = QEMU_PSCI_RET_NOT_SUPPORTED;
+        break;
+    default:
+        ret = arm_linux_smc_stub(cpu, param);
         break;
     }
 

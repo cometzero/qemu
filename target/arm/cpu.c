@@ -1539,6 +1539,9 @@ static void arm_cpu_post_init(Object *obj)
     object_property_add_uint32_ptr(obj, "psci-conduit",
                                    &cpu->psci_conduit,
                                    OBJ_PROP_FLAG_READWRITE);
+    object_property_add_uint64_ptr(obj, "linux-smc-stub-address",
+                                  &cpu->linux_smc_stub_address,
+                                  OBJ_PROP_FLAG_READWRITE);
 
     if (arm_feature(&cpu->env, ARM_FEATURE_GENERIC_TIMER)) {
         qdev_property_add_static(DEVICE(cpu), &arm_cpu_gt_cntfrq_property);

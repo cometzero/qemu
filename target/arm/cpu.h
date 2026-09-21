@@ -1045,6 +1045,9 @@ struct ArchCPU {
      */
     uint32_t psci_conduit;
 
+    /* Optional board service for calls not handled by PSCI; zero disables it. */
+    uint64_t linux_smc_stub_address;
+
     /* For v8M, initial value of the Secure VTOR */
     uint32_t init_svtor;
     /* For v8M, initial value of the Non-secure VTOR */
