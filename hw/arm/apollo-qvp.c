@@ -19,6 +19,8 @@
 #include "hw/core/qdev-properties.h"
 #include "hw/core/sysbus.h"
 #include "hw/char/pl011.h"
+#include "hw/dma/arm-dma350.h"
+#include "hw/audio/dw-apb-i2s.h"
 #include "hw/intc/arm_gicv3_common.h"
 #include "qobject/qlist.h"
 #include "target/arm/cpu.h"
@@ -45,6 +47,7 @@ struct ApolloMachineState {
     DeviceState *gic;
     void *fdt;
     int fdt_size;
+    bool i2s_dma;
 };
 
 static uint64_t apollo_mpidr(unsigned int cpu)
@@ -134,6 +137,117 @@ static void apollo_create_fdt(ApolloMachineState *s)
                      sizeof("arm,pl031\0arm,primecell"));
     qemu_fdt_setprop_cell(s->fdt, "/rtc@300d0000", "clocks", 2);
     qemu_fdt_setprop_string(s->fdt, "/rtc@300d0000", "clock-names", "apb_pclk");
+}
+
+/* Match Linux apollo-qvp.dts and QBox hw-block/ros.lua. */
+static void apollo_create_audio(ApolloMachineState *s)
+{
+    DeviceState *dma[2], *i2s[2];
+    const unsigned int dma_spi[] = { 279, 358 };
+    const unsigned int i2s_spi[] = { 356, 357 };
+    const char *clock = "/clock-1536000";
+
+    qemu_fdt_add_subnode(s->fdt, clock);
+    qemu_fdt_setprop_string(s->fdt, clock, "compatible", "fixed-clock");
+    qemu_fdt_setprop_cell(s->fdt, clock, "#clock-cells", 0);
+    qemu_fdt_setprop_cell(s->fdt, clock, "clock-frequency", 1536000);
+    qemu_fdt_setprop_cell(s->fdt, clock, "phandle", 3);
+    for (int i = 0; i < 2; i++) {
+        hwaddr base = 0x31000000 + i * 0x10000;
+        uint32_t interrupts[8 * 3];
+        g_autofree char *node = g_strdup_printf(
+            "/dma-controller@%" PRIx64, base);
+
+        dma[i] = qdev_new(TYPE_ARM_DMA350);
+        sysbus_realize_and_unref(SYS_BUS_DEVICE(dma[i]), &error_fatal);
+        sysbus_mmio_map(SYS_BUS_DEVICE(dma[i]), 0, base);
+        sysbus_connect_irq(SYS_BUS_DEVICE(dma[i]), 8,
+                           qdev_get_gpio_in(s->gic, dma_spi[i]));
+        apollo_fdt_device(s, node, "arm,dma-350", base, 0x10000, dma_spi[i]);
+        for (int channel = 0; channel < 8; channel++) {
+            interrupts[3 * channel] = cpu_to_be32(0);
+            interrupts[3 * channel + 1] = cpu_to_be32(dma_spi[i]);
+            interrupts[3 * channel + 2] = cpu_to_be32(4);
+        }
+        qemu_fdt_setprop(s->fdt, node, "interrupts", interrupts,
+                         sizeof(interrupts));
+        qemu_fdt_setprop_cell(s->fdt, node, "#dma-cells", 1);
+        qemu_fdt_setprop_cell(s->fdt, node, "phandle", 4 + i);
+    }
+    for (int i = 0; i < 2; i++) {
+        g_autofree char *name = g_strdup_printf("i2s%d", i);
+
+        i2s[i] = qdev_new(TYPE_DW_APB_I2S);
+        /* Both peers need canonical QOM paths before setting either link. */
+        object_property_add_child(OBJECT(s), name, OBJECT(i2s[i]));
+        qdev_prop_set_bit(i2s[i], "master-mode", i == 0);
+    }
+    for (int i = 0; i < 2; i++) {
+        hwaddr base = 0x30200000 + i * 0x10000;
+        g_autofree char *node = g_strdup_printf("/i2s@%" PRIx64, base);
+        g_autofree char *card = g_strdup_printf("/i2s%d-sound", i);
+        g_autofree char *name = g_strdup_printf("Apollo I2S%d", i);
+
+        object_property_set_link(OBJECT(i2s[i]), "peer", OBJECT(i2s[1 - i]),
+                                 &error_fatal);
+        sysbus_realize_and_unref(SYS_BUS_DEVICE(i2s[i]), &error_fatal);
+        sysbus_mmio_map(SYS_BUS_DEVICE(i2s[i]), 0, base);
+        sysbus_connect_irq(SYS_BUS_DEVICE(i2s[i]), 0,
+                           qdev_get_gpio_in(s->gic, i2s_spi[i]));
+        qdev_connect_gpio_out_named(i2s[i], "dma-tx-req", 0,
+            qdev_get_gpio_in_named(dma[1], "dma-req", 2 * i));
+        qdev_connect_gpio_out_named(i2s[i], "dma-rx-req", 0,
+            qdev_get_gpio_in_named(dma[1], "dma-req", 2 * i + 1));
+        qdev_connect_gpio_out_named(dma[1], "dma-ack", 2 * i,
+            qdev_get_gpio_in_named(i2s[i], "dma-tx-ack", 0));
+        qdev_connect_gpio_out_named(dma[1], "dma-ack", 2 * i + 1,
+            qdev_get_gpio_in_named(i2s[i], "dma-rx-ack", 0));
+        apollo_fdt_device(s, node, "snps,designware-i2s", base,
+                          0x10000, i2s_spi[i]);
+        qemu_fdt_setprop_cell(s->fdt, node, "clocks", 3);
+        qemu_fdt_setprop_string(s->fdt, node, "clock-names", "i2sclk");
+        qemu_fdt_setprop_cell(s->fdt, node, "#sound-dai-cells", 0);
+        qemu_fdt_setprop_cell(s->fdt, node, "phandle", 6 + i);
+        if (s->i2s_dma) {
+            qemu_fdt_setprop_cells(s->fdt, node, "dmas", 5, 2 * i,
+                                   5, 2 * i + 1);
+            qemu_fdt_setprop(s->fdt, node, "dma-names", "tx\0rx", 6);
+        }
+        qemu_fdt_add_subnode(s->fdt, card);
+        qemu_fdt_setprop_string(s->fdt, card, "compatible",
+                                "simple-audio-card");
+        qemu_fdt_setprop_string(s->fdt, card, "simple-audio-card,name", name);
+        qemu_fdt_setprop_cell(s->fdt, card, "#address-cells", 1);
+        qemu_fdt_setprop_cell(s->fdt, card, "#size-cells", 0);
+        for (int direction = 0; direction < 2; direction++) {
+            unsigned int codec_handle = 8 + 2 * i + direction;
+            unsigned int master_handle = 12 + 2 * i + direction;
+            g_autofree char *codec = g_strdup_printf("/i2s%d-spdif-%s", i,
+                direction ? "dir" : "dit");
+            g_autofree char *link = g_strdup_printf(
+                "%s/simple-audio-card,dai-link@%d", card, direction);
+            g_autofree char *cpu = g_strdup_printf("%s/cpu", link);
+            g_autofree char *dai = g_strdup_printf("%s/codec", link);
+
+            qemu_fdt_add_subnode(s->fdt, codec);
+            qemu_fdt_setprop_string(s->fdt, codec, "compatible",
+                direction ? "linux,spdif-dir" : "linux,spdif-dit");
+            qemu_fdt_setprop_cell(s->fdt, codec, "#sound-dai-cells", 0);
+            qemu_fdt_setprop_cell(s->fdt, codec, "phandle", codec_handle);
+            qemu_fdt_add_subnode(s->fdt, link);
+            qemu_fdt_setprop_cell(s->fdt, link, "reg", direction);
+            qemu_fdt_setprop_string(s->fdt, link, "format", "i2s");
+            qemu_fdt_setprop_cell(s->fdt, link, "bitclock-master",
+                                  master_handle);
+            qemu_fdt_setprop_cell(s->fdt, link, "frame-master", master_handle);
+            qemu_fdt_add_subnode(s->fdt, cpu);
+            qemu_fdt_setprop_cell(s->fdt, cpu, "sound-dai", 6 + i);
+            qemu_fdt_add_subnode(s->fdt, dai);
+            qemu_fdt_setprop_cell(s->fdt, dai, "sound-dai", codec_handle);
+            qemu_fdt_setprop_cell(s->fdt, i == 0 ? cpu : dai,
+                                  "phandle", master_handle);
+        }
+    }
 }
 
 static void *apollo_get_dtb(const struct arm_boot_info *info, int *size)
@@ -226,6 +340,7 @@ static void apollo_init(MachineState *ms)
     pl011_create(0x1a400000, qdev_get_gpio_in(s->gic, 52), serial_hd(0));
     sysbus_create_simple("pl031", 0x300d0000, qdev_get_gpio_in(s->gic, 268));
     apollo_create_fdt(s);
+    apollo_create_audio(s);
     for (int i = 0; i < ARRAY_SIZE(virtio_base); i++) {
         DeviceState *dev = qdev_new("virtio-mmio");
         g_autofree char *node = g_strdup_printf("/virtio@%" PRIx64,
@@ -248,6 +363,21 @@ static void apollo_init(MachineState *ms)
     arm_load_kernel(ARM_CPU(first_cpu), ms, &s->bootinfo);
 }
 
+static bool apollo_get_i2s_dma(Object *obj, Error **errp)
+{
+    return APOLLO_MACHINE(obj)->i2s_dma;
+}
+
+static void apollo_set_i2s_dma(Object *obj, bool value, Error **errp)
+{
+    APOLLO_MACHINE(obj)->i2s_dma = value;
+}
+
+static void apollo_instance_init(Object *obj)
+{
+    APOLLO_MACHINE(obj)->i2s_dma = true;
+}
+
 static void apollo_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
@@ -260,6 +390,10 @@ static void apollo_class_init(ObjectClass *oc, const void *data)
     mc->max_cpus = 16;
     mc->no_cdrom = true;
     mc->no_floppy = true;
+    object_class_property_add_bool(oc, "i2s-dma", apollo_get_i2s_dma,
+                                   apollo_set_i2s_dma);
+    object_class_property_set_description(oc, "i2s-dma",
+        "Describe I2S DMA in the generated DT (off selects Linux PIO)");
 }
 
 static const TypeInfo apollo_machine_type = {
@@ -267,6 +401,7 @@ static const TypeInfo apollo_machine_type = {
     .parent = TYPE_MACHINE,
     .instance_size = sizeof(ApolloMachineState),
     .class_init = apollo_class_init,
+    .instance_init = apollo_instance_init,
     .interfaces = aarch64_machine_interfaces,
 };
 

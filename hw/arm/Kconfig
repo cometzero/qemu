@@ -6,6 +6,8 @@ config APOLLO_QVP
     select DEVICE_TREE
     select PL011
     select PL031
+    select ARM_DMA350
+    select DW_APB_I2S
     select VIRTIO_MMIO
     imply VIRTIO_BLK
     imply VIRTIO_NET
