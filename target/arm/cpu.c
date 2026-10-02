@@ -145,7 +145,8 @@ static bool arm_cpu_has_work(CPUState *cs)
     ARMCPU *cpu = ARM_CPU(cs);
 
     if (arm_feature(&cpu->env, ARM_FEATURE_M)) {
-        if (cpu->env.event_register) {
+        if (qatomic_read(&cpu->env.halted_on_wfe) &&
+            qatomic_read(&cpu->env.event_register)) {
             return true;
         }
     }
@@ -782,6 +783,11 @@ bool arm_cpu_exec_halt(CPUState *cs)
     if (leave_halt) {
         /* We're about to come out of WFI/WFE: disable the WFxT timer */
         ARMCPU *cpu = ARM_CPU(cs);
+        if (qatomic_read(&cpu->env.halted_on_wfe)) {
+            /* Completing WFE consumes the event that woke the CPU. */
+            qatomic_xchg(&cpu->env.event_register, false);
+            qatomic_set(&cpu->env.halted_on_wfe, false);
+        }
         if (cpu->wfxt_timer) {
             timer_del(cpu->wfxt_timer);
         }

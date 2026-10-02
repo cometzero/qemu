@@ -385,6 +385,8 @@ void HELPER(wfi)(CPUARMState *env, uint32_t insn_len)
     uint32_t excp;
     int target_el = check_wfx_trap(env, false, &excp);
 
+    /* WFI must neither wake for nor consume a pending WFE event. */
+    qatomic_set(&env->halted_on_wfe, false);
     if (cpu_has_work(cs)) {
         /* Don't bother to go into our "low power state" if
          * we would just wake up immediately.
@@ -478,7 +480,7 @@ void HELPER(sev)(CPUARMState *env)
     CPU_FOREACH(cs) {
         ARMCPU *target_cpu = ARM_CPU(cs);
         if (arm_feature(&target_cpu->env, ARM_FEATURE_M)) {
-            target_cpu->env.event_register = true;
+            qatomic_set(&target_cpu->env.event_register, true);
         }
         if (!qemu_cpu_is_self(cs)) {
             qemu_cpu_kick(cs);
@@ -505,11 +507,12 @@ void HELPER(wfe)(CPUARMState *env)
     if (arm_feature(env, ARM_FEATURE_M)) {
         CPUState *cs = env_cpu(env);
 
-        if (env->event_register) {
-            env->event_register = false;
+        qatomic_set(&env->halted_on_wfe, false);
+        if (qatomic_xchg(&env->event_register, false)) {
             return;
         }
 
+        qatomic_set(&env->halted_on_wfe, true);
         cs->exception_index = EXCP_HLT;
         cs->halted = 1;
         cpu_loop_exit(cs);

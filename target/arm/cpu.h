@@ -773,8 +773,12 @@ typedef struct CPUArchState {
      * The event register is shared by all ARM profiles (A/R/M),
      * so it is stored in the top-level CPU state.
      * WFE/SEV handling is currently implemented only for M-profile.
+     * Runtime accesses use atomics: SEV and SEVONPEND may arrive from
+     * another vCPU or the I/O thread.
      */
     bool event_register;
+    /* Events wake an M-profile WFE, but not a WFI. */
+    bool halted_on_wfe;
 
     struct {
         uint32_t pmcr;
