@@ -11,3 +11,13 @@ config TRIBOARD
 
 config TC27X_SOC
     bool
+
+config TC397
+    bool
+    default y
+    depends on TRICORE
+    select TRICORE_ASCLIN
+    select TRICORE_STM
+    select TRICORE_IR
+    select TRICORE_PORT
+    select TC397_CAN
