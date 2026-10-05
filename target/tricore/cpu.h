@@ -71,6 +71,10 @@ struct ArchCPU {
     CPUState parent_obj;
 
     CPUTriCoreState env;
+
+    /* TC397 external interrupt handshake; independent of the board router. */
+    qemu_irq irq_ack;
+    bool nmi_level;
 };
 
 struct TriCoreCPUClass {
@@ -158,6 +162,7 @@ enum tricore_features {
     TRICORE_FEATURE_16,
     TRICORE_FEATURE_161,
     TRICORE_FEATURE_162,
+    TRICORE_FEATURE_IRQ,
 };
 
 static inline int tricore_has_feature(CPUTriCoreState *env, int feature)
@@ -250,11 +255,13 @@ int tricore_cpu_gdb_write_register(CPUState *cs, uint8_t *mem_buf, int n);
 void fpu_set_state(CPUTriCoreState *env);
 
 #define MMU_USER_IDX 2
+#define CPU_INTERRUPT_NMI CPU_INTERRUPT_TGT_EXT_0
 
 FIELD(TB_FLAGS, PRIV, 0, 2)
 
 void cpu_state_reset(CPUTriCoreState *s);
 void tricore_tcg_init(void);
+void tricore_cpu_do_interrupt(CPUState *cs, bool nmi, unsigned priority);
 void tricore_translate_code(CPUState *cs, TranslationBlock *tb,
                             int *max_insns, vaddr pc, void *host_pc);
 

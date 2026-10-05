@@ -19,6 +19,7 @@
 #include "qemu/host-utils.h"
 #include "exec/helper-proto.h"
 #include "accel/tcg/cpu-ldst.h"
+#include "hw/core/irq.h"
 #include "qemu/plugin.h"
 #include <zlib.h> /* for crc32 */
 
@@ -36,13 +37,18 @@ void raise_exception_sync_internal(CPUTriCoreState *env, uint32_t class, int tin
     cpu_restore_state(cs, pc);
     last_pc = env->PC;
 
-    /* Tin is loaded into d[15] */
-    env->gpr_d[15] = tin;
+    /* Preserve the interrupted D15 in the TC397 upper context. */
+    if (!tricore_has_feature(env, TRICORE_FEATURE_IRQ)) {
+        env->gpr_d[15] = tin;
+    }
 
     if (class == TRAPC_CTX_MNG && tin == TIN3_FCU) {
         /* upper context cannot be saved, if the context list is empty */
     } else {
         helper_svucx(env);
+    }
+    if (tricore_has_feature(env, TRICORE_FEATURE_IRQ)) {
+        env->gpr_d[15] = tin;
     }
 
     /* The return address in a[11] is updated */
@@ -67,6 +73,9 @@ void raise_exception_sync_internal(CPUTriCoreState *env, uint32_t class, int tin
     env->PSW |= MASK_PSW_IS;
     /* The I/O mode is set to Supervisor mode, which means all permissions
        are enabled: PSW.IO = 10 B .*/
+    if (tricore_has_feature(env, TRICORE_FEATURE_IRQ)) {
+        env->PSW &= ~MASK_PSW_IO;
+    }
     env->PSW |= (2 << 10);
 
     /*The current Protection Register Set is set to 0: PSW.PRS = 00 B .*/
@@ -86,11 +95,15 @@ void raise_exception_sync_internal(CPUTriCoreState *env, uint32_t class, int tin
     /*The interrupt system is globally disabled: ICR.IE = 0. The ‘old’
       ICR.IE and ICR.CCPN are saved */
 
-    /* PCXI.PIE = ICR.IE */
-    pcxi_set_pie(env, icr_get_ie(env));
-
-    /* PCXI.PCPN = ICR.CCPN */
-    pcxi_set_pcpn(env, icr_get_ccpn(env));
+    if (tricore_has_feature(env, TRICORE_FEATURE_IRQ)) {
+        /* SVUCX saved PIE/PCPN; an FCU trap must leave PCXI unchanged. */
+        icr_set_ie(env, 0);
+    } else {
+        /* PCXI.PIE = ICR.IE */
+        pcxi_set_pie(env, icr_get_ie(env));
+        /* PCXI.PCPN = ICR.CCPN */
+        pcxi_set_pcpn(env, icr_get_ccpn(env));
+    }
     /* Update PC using the trap vector table */
     env->PC = env->BTV | (class << 5);
 
@@ -2467,6 +2480,73 @@ static void save_context_upper(CPUTriCoreState *env, uint32_t ea)
     cpu_stl_le_data(env, ea + 52, env->gpr_d[13]);
     cpu_stl_le_data(env, ea + 56, env->gpr_d[14]);
     cpu_stl_le_data(env, ea + 60, env->gpr_d[15]);
+}
+
+/*
+ * TC1.6.2 interrupt entry uses the existing upper-CSA layout and RFE helper.
+ * The TC397 integration is informed by linumiz/qemu-tricore v1.0.0
+ * (9e888198363d89048baf3776b7784f2680703609); no board addresses or
+ * interrupt-router implementation are embedded in the target.
+ */
+void tricore_cpu_do_interrupt(CPUState *cs, bool nmi, unsigned priority)
+{
+    TriCoreCPU *cpu = TRICORE_CPU(cs);
+    CPUTriCoreState *env = &cpu->env;
+    uint32_t old_fcx = env->FCX;
+    uint32_t old_pc = env->PC;
+    uint32_t ea, next_fcx;
+
+    if ((old_fcx & 0xfffff) == 0) {
+        /* An exhausted free list cannot save an upper context. */
+        raise_exception_sync_internal(env, TRAPC_CTX_MNG, TIN3_FCU, 0, 0);
+    }
+    ea = ((old_fcx & MASK_FCX_FCXS) << 12) |
+         ((old_fcx & MASK_FCX_FCXO) << 6);
+    next_fcx = cpu_ldl_le_data(env, ea);
+    save_context_upper(env, ea);
+
+    env->PCXI = old_fcx & 0xfffff;
+    pcxi_set_ul(env, 1);
+    pcxi_set_pie(env, icr_get_ie(env));
+    pcxi_set_pcpn(env, icr_get_ccpn(env));
+    env->FCX = (old_fcx & 0xfff00000) | (next_fcx & 0xfffff);
+    env->gpr_a[11] = old_pc;
+
+    if (!(env->PSW & MASK_PSW_IS)) {
+        env->gpr_a[10] = env->ISP;
+    }
+    env->PSW &= ~(MASK_PSW_IO | MASK_PSW_PRS | MASK_PSW_CDC | MASK_PSW_GW);
+    env->PSW |= (TRICORE_PRIV_SM << 10) | MASK_PSW_IS | MASK_PSW_CDE;
+    icr_set_ie(env, 0);
+
+    if (nmi) {
+        env->gpr_d[15] = TIN7_NMI;
+        env->PC = (env->BTV & ~1u) | (TRAPC_NMI << 5);
+        qemu_plugin_vcpu_exception_cb(cs, old_pc);
+    } else {
+        icr_set_ccpn(env, priority);
+        env->PC = (env->BIV & ~1u) |
+                  (priority << ((env->BIV & 1) ? 3 : 5));
+        /* Acknowledge only after the CPU has committed to taking this IRQ. */
+        qemu_irq_pulse(cpu->irq_ack);
+        qemu_plugin_vcpu_interrupt_cb(cs, old_pc);
+    }
+
+    if (old_fcx == env->LCX) {
+        /* The FCD handler returns to the interrupted interrupt/trap vector. */
+        raise_exception_sync_internal(env, TRAPC_CTX_MNG, TIN3_FCD,
+                                      0, env->PC);
+    }
+}
+
+void helper_wait(CPUTriCoreState *env)
+{
+    CPUState *cs = env_cpu(env);
+
+    /* Resume immediately in the execution loop if a request is pending. */
+    cs->exception_index = EXCP_HLT;
+    cs->halted = 1;
+    cpu_loop_exit(cs);
 }
 
 static void save_context_lower(CPUTriCoreState *env, uint32_t ea)

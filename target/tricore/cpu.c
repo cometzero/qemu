@@ -20,6 +20,8 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "cpu.h"
+#include "exec/cpu-interrupt.h"
+#include "hw/core/qdev.h"
 #include "exec/translation-block.h"
 #include "qemu/error-report.h"
 #include "tcg/debug-assert.h"
@@ -71,18 +73,30 @@ static void tricore_restore_state_to_opc(CPUState *cs,
 
 static void tricore_cpu_reset_hold(Object *obj, ResetType type)
 {
-    CPUState *cs = CPU(obj);
+    TriCoreCPU *cpu = TRICORE_CPU(obj);
+    CPUTriCoreState *env = &cpu->env;
     TriCoreCPUClass *tcc = TRICORE_CPU_GET_CLASS(obj);
 
     if (tcc->parent_phases.hold) {
         tcc->parent_phases.hold(obj, type);
     }
 
-    cpu_state_reset(cpu_env(cs));
+    if (tricore_has_feature(env, TRICORE_FEATURE_IRQ)) {
+        uint64_t features = env->features;
+
+        memset(env, 0, sizeof(*env));
+        env->features = features;
+        env->PC = 0xa0000000;
+        cpu->nmi_level = false;
+    }
+    cpu_state_reset(env);
 }
 
 static bool tricore_cpu_has_work(CPUState *cs)
 {
+    if (tricore_has_feature(cpu_env(cs), TRICORE_FEATURE_IRQ)) {
+        return cpu_test_interrupt(cs, CPU_INTERRUPT_HARD | CPU_INTERRUPT_NMI);
+    }
     return true;
 }
 
@@ -166,9 +180,61 @@ static void tc37x_initfn(Object *obj)
     set_feature(&cpu->env, TRICORE_FEATURE_162);
 }
 
+static void tricore_cpu_irq_priority(void *opaque, int irq, int priority)
+{
+    TriCoreCPU *cpu = opaque;
+    CPUState *cs = CPU(cpu);
+
+    assert(priority >= 0 && priority <= UINT8_MAX);
+    cpu->env.ICR = FIELD_DP32(cpu->env.ICR, ICR, PIPN, priority);
+    if (priority) {
+        cpu_interrupt(cs, CPU_INTERRUPT_HARD);
+    } else {
+        cpu_reset_interrupt(cs, CPU_INTERRUPT_HARD);
+    }
+}
+
+static void tricore_cpu_nmi(void *opaque, int irq, int level)
+{
+    TriCoreCPU *cpu = opaque;
+
+    if (level && !cpu->nmi_level) {
+        cpu_interrupt(CPU(cpu), CPU_INTERRUPT_NMI);
+    }
+    cpu->nmi_level = !!level;
+}
+
+static void tc397_initfn(Object *obj)
+{
+    TriCoreCPU *cpu = TRICORE_CPU(obj);
+
+    set_feature(&cpu->env, TRICORE_FEATURE_162);
+    set_feature(&cpu->env, TRICORE_FEATURE_IRQ);
+    /* A priority value of zero deasserts the interrupt request. */
+    qdev_init_gpio_in_named(DEVICE(obj), tricore_cpu_irq_priority,
+                           "irq-priority", 1);
+    qdev_init_gpio_in_named(DEVICE(obj), tricore_cpu_nmi, "nmi", 1);
+    qdev_init_gpio_out_named(DEVICE(obj), &cpu->irq_ack, "irq-ack", 1);
+}
+
 static bool tricore_cpu_exec_interrupt(CPUState *cs, int interrupt_request)
 {
-    /* Interrupts are not implemented */
+    CPUTriCoreState *env = cpu_env(cs);
+    unsigned priority = FIELD_EX32(env->ICR, ICR, PIPN);
+
+    if (!tricore_has_feature(env, TRICORE_FEATURE_IRQ)) {
+        return false;
+    }
+    if (interrupt_request & CPU_INTERRUPT_NMI) {
+        cpu_reset_interrupt(cs, CPU_INTERRUPT_NMI);
+        tricore_cpu_do_interrupt(cs, true, 0);
+        return true;
+    }
+    if ((interrupt_request & CPU_INTERRUPT_HARD) && icr_get_ie(env) &&
+        priority > icr_get_ccpn(env)) {
+        tricore_cpu_do_interrupt(cs, false, priority);
+        return true;
+    }
     return false;
 }
 
@@ -243,6 +309,7 @@ static const TypeInfo tricore_cpu_type_infos[] = {
     DEFINE_TRICORE_CPU_TYPE("tc1797", tc1797_initfn),
     DEFINE_TRICORE_CPU_TYPE("tc27x", tc27x_initfn),
     DEFINE_TRICORE_CPU_TYPE("tc37x", tc37x_initfn),
+    DEFINE_TRICORE_CPU_TYPE("tc397", tc397_initfn),
 };
 
 DEFINE_TYPES(tricore_cpu_type_infos)

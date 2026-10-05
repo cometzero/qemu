@@ -385,6 +385,14 @@ static void gen_mtcr(DisasContext *ctx, TCGv_i32 r1, int32_t offset)
         if (offset == 0xfe04) {
             gen_helper_psw_write(tcg_env, r1);
             ctx->base.is_jmp = DISAS_EXIT_UPDATE;
+        } else if (offset == 0xfe2c &&
+                   has_feature(ctx, TRICORE_FEATURE_IRQ)) {
+            TCGv_i32 value = tcg_temp_new_i32();
+
+            /* PIPN is read-only; only IE and CCPN are writable. */
+            tcg_gen_andi_i32(value, r1, R_ICR_IE_161_MASK | R_ICR_CCPN_MASK);
+            tcg_gen_deposit_i32(cpu_ICR, cpu_ICR, value, 0, 16);
+            ctx->base.is_jmp = DISAS_EXIT_UPDATE;
         } else {
             switch (offset) {
 #include "csfr.h.inc"
@@ -7978,6 +7986,15 @@ static void decode_sys_interrupts(DisasContext *ctx)
         }
         break;
     case OPC2_32_SYS_ISYNC:
+        break;
+    case OPC2_32_SYS_WAIT:
+        if (has_feature(ctx, TRICORE_FEATURE_IRQ)) {
+            gen_save_pc(ctx->pc_succ_insn);
+            gen_helper_wait(tcg_env);
+            ctx->base.is_jmp = DISAS_NORETURN;
+        } else {
+            generate_trap(ctx, TRAPC_INSN_ERR, TIN2_IOPC);
+        }
         break;
     case OPC2_32_SYS_NOP:
         break;
