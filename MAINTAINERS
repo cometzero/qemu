@@ -454,6 +454,17 @@ F: target/tricore/
 F: hw/tricore/
 F: include/hw/tricore/
 F: tests/tcg/tricore/
+F: hw/char/tricore_asclin.c
+F: hw/gpio/tricore_port.c
+F: hw/net/can/tc397_can.c
+F: hw/intc/tricore_ir.c
+F: hw/timer/tricore_stm.c
+F: include/hw/char/tricore_asclin.h
+F: include/hw/gpio/tricore_port.h
+F: include/hw/net/tc397_can.h
+F: include/hw/intc/tricore_ir.h
+F: include/hw/timer/tricore_stm.h
+F: docs/system/target-tricore.rst
 
 Multiarch Linux User Tests
 M: Alex Bennée <alex.bennee@linaro.org>
