@@ -115,3 +115,6 @@ config LOONGARCH_EXTIOI
 
 config LOONGARCH_DINTC
     bool
+
+config TRICORE_IR
+    bool

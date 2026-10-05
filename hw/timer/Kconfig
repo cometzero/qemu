@@ -68,3 +68,6 @@ config STELLARIS_GPTM
 
 config AVR_TIMER16
     bool
+
+config TRICORE_STM
+    bool
