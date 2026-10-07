@@ -1253,6 +1253,11 @@ static void cortex_a720ae_dsu_pmu_pmxevcntr_write(
 }
 
 static const ARMCPRegInfo cortex_a720ae_dsu_pmu_cp_reginfo[] = {
+    { .name = "CPUPWRCTLR_EL1", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 2, .opc2 = 7,
+      .access = PL1_RW, .type = ARM_CP_OVERRIDE, .resetvalue = 0,
+      .fieldoffset = offsetof(CPUARMState, a720ae_cpupwrctlr),
+      .accessfn = access_actlr_w },
     { .name = "CLUSTERPWRCTLR_EL1", .state = ARM_CP_STATE_AA64,
       .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 3, .opc2 = 5,
       .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0x70 },

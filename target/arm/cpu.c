@@ -38,6 +38,7 @@
 #include "hw/core/qdev-properties.h"
 #if !defined(CONFIG_USER_ONLY)
 #include "hw/core/loader.h"
+#include "hw/core/irq.h"
 #include "hw/core/boards.h"
 #ifdef CONFIG_TCG
 #include "hw/intc/armv7m_nvic.h"
@@ -281,6 +282,9 @@ static void arm_cpu_reset_hold(Object *obj, ResetType type)
         acc->parent_phases.hold(obj, type);
     }
 
+#ifndef CONFIG_USER_ONLY
+    qemu_set_irq(cpu->powerdown_wfi, 0);
+#endif
     memset(env, 0, offsetof(CPUARMState, end_reset_fields));
 
     g_hash_table_foreach(cpu->cp_regs, cp_reg_reset, cpu);
@@ -783,6 +787,9 @@ bool arm_cpu_exec_halt(CPUState *cs)
     if (leave_halt) {
         /* We're about to come out of WFI/WFE: disable the WFxT timer */
         ARMCPU *cpu = ARM_CPU(cs);
+#ifndef CONFIG_USER_ONLY
+        qemu_set_irq(cpu->powerdown_wfi, 0);
+#endif
         if (qatomic_read(&cpu->env.halted_on_wfe)) {
             /* Completing WFE consumes the event that woke the CPU. */
             qatomic_xchg(&cpu->env.event_register, false);
@@ -1145,6 +1152,8 @@ static void arm_cpu_initfn(Object *obj)
         qdev_init_gpio_in(DEVICE(cpu), arm_cpu_set_irq, 6);
     }
 
+    qdev_init_gpio_out_named(DEVICE(cpu), &cpu->powerdown_wfi,
+                            "powerdown-wfi", 1);
     qdev_init_gpio_out(DEVICE(cpu), cpu->gt_timer_outputs,
                        ARRAY_SIZE(cpu->gt_timer_outputs));
 

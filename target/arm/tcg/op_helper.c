@@ -26,6 +26,9 @@
 #include "accel/tcg/cpu-ldst.h"
 #include "accel/tcg/probe.h"
 #include "cpregs.h"
+#ifndef CONFIG_USER_ONLY
+#include "hw/core/irq.h"
+#endif
 
 #define SIGNBIT (uint32_t)0x80000000
 #define SIGNBIT64 ((uint64_t)1 << 63)
@@ -407,6 +410,9 @@ void HELPER(wfi)(CPUARMState *env, uint32_t insn_len)
 
     cs->exception_index = EXCP_HLT;
     cs->halted = 1;
+    if ((env->a720ae_cpupwrctlr & 1) && arm_current_el(env) == 3) {
+        qemu_set_irq(ARM_CPU(cs)->powerdown_wfi, 1);
+    }
     cpu_loop_exit(cs);
 #endif
 }

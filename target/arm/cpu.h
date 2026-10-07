@@ -791,6 +791,8 @@ typedef struct CPUArchState {
         uint64_t pmccntr;
     } a720ae_dsu_pmu;
 
+    uint64_t a720ae_cpupwrctlr;
+
     /* Fields up to this point are cleared by a CPU reset */
     struct {} end_reset_fields;
 
@@ -995,6 +997,7 @@ struct ArchCPU {
     qemu_irq pmu_interrupt;
     qemu_irq ras_fault_interrupt;
     qemu_irq ras_uncontainable_interrupt;
+    qemu_irq powerdown_wfi;
 
     /* MemoryRegion to use for secure physical accesses */
     MemoryRegion *secure_memory;

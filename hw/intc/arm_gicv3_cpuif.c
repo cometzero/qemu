@@ -1064,7 +1064,11 @@ void gicv3_cpuif_update(GICv3CPUState *cs)
         cs->hppi.grp = GICV3_G0;
     }
 
-    if (icc_hppi_can_preempt(cs)) {
+    /* Wake requests bypass CPU-interface masks while the PE is asleep. */
+    bool asleep = cs->gicr_waker & GICR_WAKER_ProcessorSleep;
+    qemu_set_irq(cs->wake_request, asleep && cs->hppi.prio != 0xff);
+
+    if (!asleep && icc_hppi_can_preempt(cs)) {
         /* We have an interrupt: should we signal it as IRQ or FIQ?
          * This is described in the GICv3 spec section 4.6.2.
          */

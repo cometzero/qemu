@@ -256,7 +256,7 @@ qtests_aarch64 = \
   (config_all_devices.has_key('CONFIG_ARM_VIRT') ? ['arm-gicv3-baseline-test'] : []) + \
   (config_all_devices.has_key('CONFIG_ARM_VIRT') ? ['arm-gicv3-ext-range-cpuif-test'] : []) + \
   (config_all_devices.has_key('CONFIG_ARM_VIRT') ? ['arm-gicv3-ext-range-gpio-delivery-test'] : []) + \
-  (config_all_devices.has_key('CONFIG_ARM_VIRT') ? ['arm-gicv3-eppi-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_ARM_VIRT') ? ['arm-gicv3-eppi-test', 'arm-gicv3-wakeup-test'] : []) + \
   (config_all_devices.has_key('CONFIG_ARM_VIRT') ? ['arm-gicv3-espi-test'] : []) + \
   (config_all_devices.has_key('CONFIG_ARM_VIRT') ? ['arm-gicv3-ext-range-gpio-abi-test'] : []) + \
   (config_all_devices.has_key('CONFIG_ARM_VIRT') ? ['arm-gicv3-ext-range-vmstate-test'] : []) + \
